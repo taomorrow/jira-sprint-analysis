@@ -1,0 +1,8 @@
+{
+  "name": "jira-sprint-analysis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone Jira Sprint Analysis userscript",
+  "scripts": {"test": "node --test", "check": "node --check jira-sprint-analysis.user.js"},
+  "devDependencies": {"jsdom": "^27.0.0"}
+}
