@@ -1,7 +1,8 @@
 <!doctype html><meta charset="utf-8"><title>Sprint Analysis · 模拟数据预览</title>
 <style>body{font:16px system-ui;background:#edf1f7;padding:40px;color:#172b4d}</style>
-<h1>Jira Sprint Analysis</h1><p>界面预览：仅使用本地模拟任务，不连接真实 Jira。</p><p>点击右下角 Sprint Analysis → 载入 Sprint → 开始分析。</p>
+<h1>Jira Sprint Analysis</h1><p>界面预览：仅使用本地模拟任务，不连接真实 Jira。</p><p>点击右下角 Sprint Analysis → 载入当前页面 → 开始分析。</p>
 <script>
+history.replaceState(null,'','?jql=project%20%3D%20DEMO');
 const midnight=new Date(new Date(Date.now()+8*3600000).toISOString().slice(0,10)+'T00:00:00+08:00').getTime();
 const samples=Array.from({length:12},(_,n)=>({key:'DEMO-'+(n+1),fields:{summary:['接口联调示例','Sprint 任务示例','测试验收示例'][n%3],created:new Date(midnight-3*86400000).toISOString(),updated:new Date(midnight).toISOString(),status:{id:String(n%4),name:['OPEN','IN PROGRESS','READY FOR TEST','COMPLETED'][n%4]},customfield_1:[{id:7,name:'Demo Sprint · 模拟数据',state:'active'}]},changelog:{startAt:0,total:1,histories:[{id:'1',created:new Date(midnight).toISOString(),items:[{field:'status',from:String((n+1)%4),fromString:['OPEN','IN PROGRESS','READY FOR TEST','COMPLETED'][(n+1)%4]}]}]}}));
 window.fetch=async path=>{const u=new URL(path,location.origin);let data;if(u.pathname.endsWith('/field'))data=[{id:'customfield_1',schema:{custom:'com.pyxis.greenhopper.jira:gh-sprint'}}];else if(u.pathname.endsWith('/search'))data={total:samples.length,issues:samples};else data=samples.find(i=>i.key===u.pathname.split('/').at(-1));return {ok:true,headers:{get:()=> 'application/json'},json:async()=>data};};

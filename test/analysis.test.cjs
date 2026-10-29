@@ -24,8 +24,8 @@ test('aggregation preserves state totals, zero denominator and new issues',()=>{
  assert.equal(core.rate(0,2),'新增');assert.equal(core.rate(0,0),'—');assert.equal(core.rate(4,3),'-25.0%');
  assert.equal(core.csvCell('=1+1'),'"\'=1+1"');assert.equal(core.csvCell('a,"b"'),'"a,""b"""');
 });
-async function fixture({truncated=false,fail=false}={}) {
- const dom=new JSDOM('<body></body>',{url:'https://jira.xpaas.lenovo.com/issues/?filter=180929',runScripts:'outside-only'});
+async function fixture({truncated=false,fail=false,mismatch=false}={}) {
+ const dom=new JSDOM('<body></body>',{url:'https://jira.xpaas.lenovo.com/issues/?filter=180929&jql=project%20%3D%20DEMO',runScripts:'outside-only'});
  const {window:w}=dom;const calls=[];let detailCalls=0;
  w.Date.now=()=>now;
  w.HTMLElement.prototype.scrollIntoView=function(){};
@@ -35,20 +35,41 @@ async function fixture({truncated=false,fail=false}={}) {
  if(u.pathname.endsWith('/field'))data=[{id:'customfield_1',schema:{custom:'com.pyxis.greenhopper.jira:gh-sprint'}}];
  else if(u.pathname.endsWith('/search')){const start=Number(u.searchParams.get('startAt'));data={total:2,issues:[{...i,key:start===0?'DEMO-1':'DEMO-2'}]};}
  else if(u.pathname.endsWith('/changelog')){if(fail)return {ok:false,status:404};data={total:2,values:i.changelog.histories};}
- else {detailCalls++;data=JSON.parse(JSON.stringify(i));data.key=u.pathname.split('/').at(-1);if(truncated)data.changelog.histories=data.changelog.histories.slice(0,1);}
+ else {detailCalls++;data=JSON.parse(JSON.stringify(i));data.key=u.pathname.split('/').at(-1);if(mismatch)data.fields.updated='2026-10-29T01:00:00.000Z';if(truncated)data.changelog.histories=data.changelog.histories.slice(0,1);}
  return {ok:true,headers:{get:()=> 'application/json'},json:async()=>data};};
  w.eval(fs.readFileSync(require.resolve('../jira-sprint-analysis.user.js'),'utf8'));
  const root=w.document.getElementById('jsa-host').shadowRoot;
  async function click(id){root.getElementById(id).click();for(let n=0;n<100&&root.getElementById('run').disabled;n++)await new Promise(r=>setTimeout(r,1));assert.equal(root.getElementById('run').disabled,false);}
  await click('load');await click('run');return {dom,root,calls,click,get detailCalls(){return detailCalls;}};
 }
-test('UI integration: all search pages, cached histories, safe text and drilldown',async()=>{
+test('UI integration: all current-query pages, refreshed histories, safe text and drilldown',async()=>{
  const f=await fixture();assert.match(f.root.getElementById('message').textContent,/分析完成/);
  assert.ok(f.calls.some(x=>x.includes('startAt=1')));assert.equal(f.detailCalls,2);
  f.root.getElementById('results').querySelectorAll('td button')[1].click();assert.match(f.root.getElementById('detail').textContent,/<img src=x/);assert.equal(f.root.getElementById('detail').querySelector('img'),null);
- await f.click('run');assert.equal(f.detailCalls,2);f.dom.window.close();
+ await f.click('run');assert.equal(f.detailCalls,4);f.dom.window.close();
 });
 test('UI integration: truncated history fallback and hard failure',async()=>{
  const f=await fixture({truncated:true});assert.match(f.root.getElementById('message').textContent,/分析完成/);assert.ok(f.calls.some(x=>x.includes('/changelog?')));f.dom.window.close();
  const b=await fixture({truncated:true,fail:true});assert.match(b.root.getElementById('message').textContent,/历史被截断/);assert.equal(b.root.getElementById('results').children.length,0);assert.equal(b.root.getElementById('export').disabled,true);b.dom.window.close();
+});
+
+test('current page JQL wins over saved filter, editor wins over URL, no fixed fallback',()=>{
+ const d=new JSDOM('<textarea id="jqltextarea">project = OSP</textarea>').window.document;
+ assert.equal(core.pageQuery(d,'https://example.test/issues/?filter=180929&jql=project%3DCSP').jql,'project = OSP');
+ d.querySelector('textarea').style.display='none';
+ assert.equal(core.pageQuery(d,'https://example.test/issues/?jql=project%3DCSP').jql,'project=CSP');
+ d.querySelector('textarea').remove();
+ assert.equal(core.pageQuery(d,'https://example.test/issues/?filter=180929&jql=project%3DCSP').jql,'project=CSP');
+ assert.equal(core.pageQuery(d,'https://example.test/issues/?filter=123').filter,'123');
+ assert.equal(core.pageQuery(d,'https://example.test/browse/CSP-778').jql,'key = "CSP-778"');
+ assert.throws(()=>core.pageQuery(d,'https://example.test/issues/'),/无法识别/);
+});
+test('different updated serialization never falsely reports a concurrent edit',async()=>{
+ const f=await fixture({mismatch:true});
+ assert.match(f.root.getElementById('message').textContent,/分析完成/);
+ const searches=f.calls.filter(c=>c.includes('/search?'));
+ assert.ok(searches.length>=4);
+ for(const path of searches)assert.equal(new URL(path,'https://example.test').searchParams.get('jql'),'project = DEMO');
+ assert.ok(!f.calls.some(c=>c.includes('/filter/')));
+ f.dom.window.close();
 });
