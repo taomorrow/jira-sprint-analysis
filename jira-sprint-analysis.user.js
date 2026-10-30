@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira Sprint Analysis
 // @namespace    https://github.com/taomorrow/jira-sprint-analysis
-// @version      0.1.2
+// @version      0.1.3
 // @description  按 Sprint 对比昨日与今日状态，查看变化明细并导出 CSV。
 // @author       taomorrow
 // @match        https://jira.xpaas.lenovo.com/*
@@ -102,15 +102,23 @@
     throw new Error('无法识别当前页面的查询条件。请在 Jira 问题列表点击 Search，或切换 Advanced 后重新载入。');
   }
   const core = {sprints,statusAt,rate,aggregate,csvCell,pageQuery,matchesSprint,filterGroups,rowsWithTotal};
-  if (typeof module === 'object' && module.exports) { module.exports = core; return; }
-  if (document.getElementById('jsa-host')) return;
-  const host=document.createElement('div'); host.id='jsa-host'; document.body.append(host);
+  if (typeof window === 'undefined' && typeof module === 'object' && module.exports) { module.exports = core; return; }
+  // An older duplicate userscript may run first. Replace its panel rather than silently exiting.
+  const existing=document.getElementById('jsa-host');
+  if(existing){
+    const previous=existing.dataset.jsaVersion||existing.shadowRoot?.querySelector('h1 small')?.textContent?.replace(/^v/,'')||'0.0.0';
+    const parts=v=>v.split('.').map(Number),a=parts(previous),b=parts('0.1.3');
+    const comparison=a.reduce((r,n,i)=>r||n-(b[i]||0),0);
+    if(comparison>=0)return;
+    existing.remove();
+  }
+  const host=document.createElement('div'); host.id='jsa-host';host.dataset.jsaVersion='0.1.3'; document.body.append(host);
   const root=host.attachShadow({mode:'open'});
   root.innerHTML=`<style>
   :host{all:initial;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#172b4d}*{box-sizing:border-box}button,input,select{font:inherit}button{cursor:pointer;border:1px solid #c9d3e0;border-radius:6px;background:white;color:#172b4d;padding:7px 12px}button:hover{background:#edf3ff}.primary:hover,#launch:hover{background:#0747a6}#close{white-space:nowrap}button:disabled{opacity:.5;cursor:wait}.primary,#launch{background:#0052cc;color:white;border-color:#0052cc}#launch{position:fixed;right:24px;bottom:24px;z-index:2147483646;box-shadow:0 5px 20px #091e4240}#overlay{position:fixed;inset:0;background:#091e4260;z-index:2147483647;padding:3vh 3vw;display:none}#panel{background:#f7f9fc;border-radius:14px;max-width:1280px;margin:auto;height:94vh;overflow:auto;box-shadow:0 20px 80px #091e4255;padding:24px}header{display:flex;align-items:center;justify-content:space-between}h1{font-size:24px;margin:0}h2{font-size:17px;margin:0 0 12px}.muted{color:#5e6c84}p{margin:8px 0}.controls{display:flex;gap:16px;align-items:end;flex-wrap:wrap;margin:18px 0}label{display:flex;flex-direction:column;gap:5px}input,select{border:1px solid #b3bfd0;border-radius:5px;padding:7px;background:white;color:#172b4d}fieldset{margin:0;border:1px solid #b3bfd0;border-radius:6px;padding:8px;background:white;min-width:280px;max-width:100%}.choices{height:140px;overflow:auto;max-width:430px}.choices label{display:flex;flex-direction:row;align-items:center;gap:8px;padding:3px;cursor:pointer}.choices input{margin:0}.tools{display:flex;gap:8px;margin-bottom:5px}.tools button{padding:2px 8px}legend{padding:0 5px}.card{overflow-x:auto;background:white;border:1px solid #dfe5ed;border-radius:9px;margin:16px 0;padding:18px}.notice{padding:10px 14px;background:#eaf1ff;border-radius:6px}#message{white-space:pre-wrap}#message.error{background:#fff0ed;color:#ae2a19;padding:12px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{text-align:left;border-bottom:1px solid #e8ecf2;padding:9px 10px}th{background:#f4f6fa;color:#5e6c84}td button{border:0;padding:0;color:#0052cc;background:none;text-decoration:underline}.delta{font-variant-numeric:tabular-nums;font-weight:600}a{color:#0052cc}#detail{overflow:auto}small{font-size:12px}@media(max-width:650px){#panel{padding:14px}.controls{display:block}label{margin:10px 0}#sprints{min-width:0;width:100%}th,td{padding:6px}h1{font-size:20px}}
-  </style><button id="launch">◷ Sprint Analysis</button><div id="overlay"><section id="panel" role="dialog" aria-modal="true" aria-label="Sprint Analysis"><header><div><h1>Sprint Analysis <small class="muted">v0.1.2</small></h1><p class="muted">昨日日终 → 今日截至查询时 · Asia/Shanghai（UTC+08:00）</p></div><button id="close" aria-label="关闭">关闭</button></header>
+  </style><button id="launch">◷ Sprint Analysis v0.1.3</button><div id="overlay"><section id="panel" role="dialog" aria-modal="true" aria-label="Sprint Analysis"><header><div><h1>Sprint Analysis <small class="muted">v0.1.3</small></h1><p class="muted">昨日日终 → 今日截至查询时 · Asia/Shanghai（UTC+08:00）</p></div><button id="close" aria-label="关闭">关闭</button></header>
   <div class="notice">口径：以本次查询匹配的成员回溯昨日状态；不还原历史 Sprint 成员或历史筛选条件。已关闭 Sprint 也可能保留在任务 Sprint 字段中；同一任务可出现在多个 Sprint，各 Sprint 不可直接相加。</div>
-  <div class="controls"><button id="load">载入当前页面（全部分页）</button><fieldset id="sprint-box"><legend>Sprint（勾选，可多选）</legend><div class="tools"><button id="sprint-all" type="button">全选</button><button id="sprint-none" type="button">清空</button></div><div id="sprints" class="choices"></div></fieldset><fieldset id="status-box"><legend>状态（默认全部，可多选）</legend><label><input type="checkbox" id="status-all" checked>全部状态（含历史状态）</label><div id="statuses" class="choices"></div></fieldset><button id="run" class="primary">开始分析</button><button id="export" disabled>导出 CSV</button></div>
+  <div class="controls"><button id="load">载入当前页面（全部分页）</button><fieldset id="sprint-box"><legend>Sprint（勾选，可多选）</legend><div class="tools"><button id="sprint-all" type="button">全选</button><button id="sprint-none" type="button">清空</button></div><div id="sprints" class="choices"></div></fieldset><fieldset id="status-box"><legend>状态（默认全部，可多选）</legend><label><input type="checkbox" id="status-all" checked>全部状态（含历史状态）</label><p class="muted">直接勾选下面的状态即可切换为指定状态。</p><div id="statuses" class="choices"></div></fieldset><button id="run" class="primary">开始分析</button><button id="export" disabled>导出 CSV</button></div>
   <p class="muted">统计当前页面查询的全部分页，不扩大到整个 Sprint。修改 Jira 搜索条件后请先点击 Search，再重新载入。若页面排除了已解决任务，完成数量也会受限。</p><p id="message" role="status">点击“载入当前页面”读取全部结果；本工具只读取 Jira，不修改任务。</p><div id="results"></div><div id="detail"></div></section></div>`;
   const $=id=>root.getElementById(id); let field, groups=[], busy=false, reportMeta='', loadedQuery='';
   const message=(s,error=false)=>{ $('message').textContent=s; $('message').className=error?'error':''; };
@@ -185,7 +193,7 @@
   function invalidate(){if(busy)return;groups=[];$('results').replaceChildren();$('detail').replaceChildren();$('export').disabled=true;message(`已选择 ${selected().length} 个 Sprint；状态：${$('status-all').checked?'全部':selectedStatuses().length+' 项'}。请点击“开始分析”。`);}
   $('sprints').onchange=invalidate;
   $('statuses').onchange=()=>{$('status-all').checked=false;invalidate();};
-  $('status-all').onchange=()=>{for(const x of $('statuses').querySelectorAll('input'))x.checked=$('status-all').checked;invalidate();};
+  $('status-all').onchange=()=>{for(const x of $('statuses').querySelectorAll('input'))x.checked=false;invalidate();};
   for(const [id,checked] of [['sprint-all',true],['sprint-none',false]])$(id).onclick=()=>{for(const x of $('sprints').querySelectorAll('input'))x.checked=checked;invalidate();};
   async function load(){
     loadedQuery='';$('sprints').replaceChildren();
@@ -201,7 +209,7 @@
     for(const st of catalog)statuses.set(String(st.id),st.name);
     for(const i of issues)statuses.set(String(i.fields.status.id),i.fields.status.name);
     $('statuses').replaceChildren();$('status-all').checked=true;
-    for(const [id,name] of [...statuses].sort((a,b)=>a[1].localeCompare(b[1])))choice($('statuses'),id,name,true);
+    for(const [id,name] of [...statuses].sort((a,b)=>a[1].localeCompare(b[1])))choice($('statuses'),id,name,false);
     loadedQuery=query;
     message(`已读取当前页面全部 ${issues.length} 条任务、${options.length} 个 Sprint 分组。可多选后分析。\nJQL：${loadedQuery}${issues.length?'':'（当前页面没有可见任务）'}`);
   }
@@ -236,7 +244,7 @@
     const allGroups=aggregate(scoped,field,ids,cutoff,now);
     // Offer historical statuses after reading changelogs; keep explicit selection unchanged.
     const known=new Set([...$('statuses').querySelectorAll('input')].map(x=>x.value));
-    for(const g of allGroups)for(const [id,row] of g.rows)if(!known.has(id)){choice($('statuses'),id,row.name,statusIds===null);known.add(id);}
+    for(const g of allGroups)for(const [id,row] of g.rows)if(!known.has(id)){choice($('statuses'),id,row.name,false);known.add(id);}
     if(statusIds!==null)for(const g of allGroups)for(const id of statusIds)if(!g.rows.has(id)){
       const input=[...$('statuses').querySelectorAll('input')].find(x=>x.value===id);
       g.rows.set(id,{id,name:input?.parentElement.textContent||id,before:[],after:[]});

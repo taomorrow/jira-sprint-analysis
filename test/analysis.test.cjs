@@ -98,3 +98,43 @@ test('selected statuses use independent yesterday/today totals, include transiti
  result.querySelector('button').click();assert.match(f.root.getElementById('detail').textContent,/In Progress → Done/);
  f.dom.window.close();
 });
+test('clicking a named status from default All selects that status, not every other status',async()=>{
+ const f=await fixture({beforeRun(root){root.querySelector('#statuses input[value="2"]').click();}});
+ const labels=[...f.root.getElementById('results').querySelectorAll('tr td:first-child')].map(x=>x.textContent);
+ assert.deepEqual(labels,['In Progress','所选状态合计']);
+ f.dom.window.close();
+});
+test('198-result paging, Sprint + two statuses and CSV use the same selected scope',async()=>{
+ const dom=new JSDOM('<body></body>',{url:'https://jira.xpaas.lenovo.com/issues/?jql=project%3DDEMO',runScripts:'outside-only'}),w=dom.window;
+ w.Date.now=()=>now;w.HTMLElement.prototype.scrollIntoView=function(){};
+ // Jira pages may define a global module; that must not disable the userscript.
+ w.module={exports:{}};
+ const samples=Array.from({length:198},(_,n)=>{
+ const i=issue('DEMO-'+(n+1));const before=['2','4','1','2'][n%4],after=['4','3','2','2'][n%4],names={'1':'Open','2':'In Progress','3':'Done','4':'SIT'};
+ i.fields.status={id:after,name:names[after]};i.fields.customfield_1=[{id:n<4?7:8,name:n<4?'Selected Sprint':'Excluded Sprint',state:n<4?'active':'future'}];
+ i.changelog={total:1,startAt:0,histories:[{id:'1',created:'2026-10-29T08:00:00+08:00',items:[{field:'status',from:before,fromString:names[before],to:after,toString:names[after]}]}]};return i;
+ });
+ const starts=[],details=[];
+ w.fetch=async path=>{const u=new URL(path,w.location.origin);let data;
+ if(u.pathname.endsWith('/field'))data=[{id:'customfield_1',schema:{custom:'com.pyxis.greenhopper.jira:gh-sprint'}}];
+ else if(u.pathname.endsWith('/status'))data=[{id:'1',name:'Open'},{id:'2',name:'In Progress'},{id:'3',name:'Done'},{id:'4',name:'SIT'}];
+ else if(u.pathname.endsWith('/search')){const start=Number(u.searchParams.get('startAt'));starts.push(start);data={total:198,issues:samples.slice(start,start+50)};}
+ else{const key=u.pathname.split('/').at(-1);details.push(key);data=samples.find(i=>i.key===key);}
+ return {ok:true,headers:{get:()=> 'application/json'},json:async()=>structuredClone(data)};};
+ let exported;w.Blob=class{constructor(parts){exported=parts.join('');}};w.URL.createObjectURL=()=> 'blob:mock';w.URL.revokeObjectURL=()=>{};w.HTMLAnchorElement.prototype.click=function(){};
+ const source=fs.readFileSync(require.resolve('../jira-sprint-analysis.user.js'),'utf8');
+ // Reproduce an old panel winning the previous early-return check.
+ const old=w.document.createElement('div');old.id='jsa-host';old.attachShadow({mode:'open'}).innerHTML='<h1><small>v0.1.1</small></h1>';w.document.body.append(old);
+ w.eval(source);const root=w.document.getElementById('jsa-host').shadowRoot;
+ assert.match(root.getElementById('launch').textContent,/0.1.3/);assert.equal(old.isConnected,false);
+ async function click(id){root.getElementById(id).click();for(let n=0;n<500&&root.getElementById('run').disabled;n++)await new Promise(r=>setTimeout(r,1));assert.equal(root.getElementById('run').disabled,false);}
+ await click('load');
+ root.querySelector('#statuses input[value="2"]').click();root.querySelector('#statuses input[value="4"]').click();
+ await click('run');
+ assert.deepEqual(starts,[0,50,100,150,0,50,100,150]);assert.deepEqual(details.sort(),['DEMO-1','DEMO-2','DEMO-3','DEMO-4']);
+ const rows=[...root.querySelectorAll('#results tr')].slice(1).map(r=>[...r.querySelectorAll('td')].map(x=>x.textContent));
+ assert.deepEqual(rows,[['In Progress','2','2','0','0.0%'],['SIT','1','1','0','0.0%'],['所选状态合计','3','3','0','0.0%']]);
+ await click('export');assert.ok(exported.includes('"In Progress","2","2"'));assert.ok(exported.includes('"SIT","1","1"'));assert.ok(!exported.includes('Excluded Sprint'));assert.ok(!exported.includes('"Done"'));
+ w.eval(source);assert.equal(w.document.querySelectorAll('#jsa-host').length,1);
+ dom.window.close();
+});
