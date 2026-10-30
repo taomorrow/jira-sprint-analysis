@@ -128,7 +128,7 @@ w.HTMLElement.prototype.scrollIntoView=function(){};
  // Reproduce an old panel winning the previous early-return check.
  const old=w.document.createElement('div');old.id='jsa-host';old.attachShadow({mode:'open'}).innerHTML='<h1><small>v0.1.1</small></h1>';w.document.body.append(old);
  w.eval(source);const root=w.document.getElementById('jsa-host').shadowRoot;
- assert.match(root.getElementById('launch').textContent,/0.1.5/);assert.equal(old.isConnected,false);
+ assert.match(root.getElementById('launch').textContent,/0.1.6/);assert.equal(old.isConnected,false);
  async function click(id){root.getElementById(id).click();for(let n=0;n<500&&root.getElementById('run').disabled;n++)await new Promise(r=>setTimeout(r,1));assert.equal(root.getElementById('run').disabled,false);}
  await click('load');
  root.querySelector('#statuses input[value="in progress"]').click();root.querySelector('#statuses input[value="sit"]').click();
@@ -203,4 +203,22 @@ test('Teams preview/cancel never sends; explicit confirmation sends exact previe
 test('Teams timeouts are not automatically retried or reported as delivered',async()=>{
  let count=0;const f=await fixture({setupGM(w){w.GM_getValue=()=>({name:'示例频道',url:teamsTestUrl});w.GM_xmlhttpRequest=x=>{count++;x.ontimeout();};}});
  await f.click('teams-preview');await f.click('teams-send');assert.equal(count,1);assert.match(f.root.getElementById('teams-send-status').textContent,/投递结果未知/);assert.equal(f.root.getElementById('teams-send').disabled,true);f.dom.window.close();
+});
+
+test('connect metadata follows documented domain syntax and URL accepts default HTTPS port',()=>{
+ const source=fs.readFileSync(require.resolve('../jira-sprint-analysis.user.js'),'utf8');
+ assert.match(source,/\/\/ @connect +api\.powerplatform\.com/);assert.ok(!source.includes('@connect      *.'));
+ assert.equal(core.validateTeamsUrl('https://example.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/23/workflows/demo/triggers/manual/paths/invoke?api-version=1\\&sig=TEST'), 'https://example.environment.api.powerplatform.com/powerautomate/automations/direct/cu/23/workflows/demo/triggers/manual/paths/invoke?api-version=1&sig=TEST');
+});
+test('connection diagnostic sends only HEAD and safely explains HTTP reachability',async()=>{
+ const requests=[];const f=await fixture({setupGM(w){w.GM_getValue=()=>({name:'示例频道',url:teamsTestUrl});w.GM_xmlhttpRequest=x=>{requests.push(x);x.onload({status:200,readyState:4});};}});
+ await f.click('teams-config');await f.click('teams-diagnose');
+ assert.equal(requests.length,1);assert.equal(requests[0].method,'HEAD');assert.equal(requests[0].data,undefined);
+ assert.match(f.root.getElementById('teams-config-status').textContent,/HEAD 不能证明 POST/);
+ assert.ok(!f.root.getElementById('teams-config-status').textContent.includes('LOCAL_TEST_ONLY'));f.dom.window.close();
+});
+test('network and HTTP diagnostics expose codes but redact webhook secrets and response contents',()=>{
+ const msg=core.teamsResponseInfo({status:0,readyState:4,error:'net::ERR_FAILED Refused to connect '+teamsTestUrl,responseText:'secret body LOCAL_TEST_ONLY'});
+ assert.match(msg,/HTTP 0/);assert.match(msg,/ERR_FAILED/);assert.ok(!msg.includes('LOCAL_TEST_ONLY'));assert.ok(!msg.includes('https://'));
+ assert.equal(core.teamsResponseInfo({status:401,responseText:JSON.stringify({error:{code:'AuthorizationFailed',message:teamsTestUrl}})}),'HTTP 401；AuthorizationFailed');
 });

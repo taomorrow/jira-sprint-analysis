@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira Sprint Analysis
 // @namespace    https://github.com/taomorrow/jira-sprint-analysis
-// @version      0.1.5
+// @version      0.1.6
 // @description  按 Sprint 对比昨日与今日状态，查看变化明细并导出 CSV。
 // @author       taomorrow
 // @match        https://jira.xpaas.lenovo.com/*
@@ -10,9 +10,9 @@
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // @grant        GM_xmlhttpRequest
-// @connect      *.logic.azure.com
-// @connect      *.api.powerplatform.com
-// @connect      *.api.powerautomate.com
+// @connect      logic.azure.com
+// @connect      api.powerplatform.com
+// @connect      api.powerautomate.com
 // @run-at       document-idle
 // @homepageURL  https://github.com/taomorrow/jira-sprint-analysis
 // @downloadURL  https://raw.githubusercontent.com/taomorrow/jira-sprint-analysis/main/jira-sprint-analysis.user.js
@@ -138,10 +138,22 @@
     throw new Error('无法识别当前页面的查询条件。请在 Jira 问题列表点击 Search，或切换 Advanced 后重新载入。');
   }
   function validateTeamsUrl(value){
-    let u;try{u=new URL(String(value).trim());}catch{throw new Error('请输入有效的 Teams Workflows HTTPS Webhook 地址。');}
+    let u;try{u=new URL(String(value).trim().replace(/\\&/g,'&').replace(/&amp;/g,'&'));}catch{throw new Error('请输入有效的 Teams Workflows HTTPS Webhook 地址。');}
     const allowed=['logic.azure.com','api.powerplatform.com','api.powerautomate.com'];
     if(u.protocol!=='https:'||u.username||u.password||u.hash||u.port||!allowed.some(h=>u.hostname.endsWith('.'+h))||!u.pathname.includes('/workflows/'))throw new Error('仅支持微软 Teams Workflows 的 HTTPS 地址（logic.azure.com / api.powerplatform.com / api.powerautomate.com），不支持旧版 Connector。');
     return u.href;
+  }
+  function teamsResponseInfo(response={}){
+    const parts=[];
+    if(Number.isFinite(response.status))parts.push('HTTP '+response.status);
+    if(Number.isFinite(response.readyState))parts.push('readyState '+response.readyState);
+    let code='';try{code=JSON.parse(response.responseText||'{}').error?.code||'';}catch{}
+    if(/^[A-Za-z0-9_.-]{1,100}$/.test(code))parts.push(code);
+    const raw=String(response.error||response.message||'');
+    const network=/\b(?:net::)?ERR_[A-Z0-9_]+\b/.exec(raw)?.[0];if(network)parts.push(network);
+    if(/not permitted|not allowed|refused to connect|whitelist|blocked by.*user/i.test(raw))parts.push('油猴连接授权被拒绝，请检查脚本设置中的用户域名白名单');
+    // Do not include raw error strings, response bodies or URLs: they may contain the webhook signature.
+    return parts.join('；')||'浏览器/扩展未提供 HTTP 响应';
   }
   function buildTeamsReport(groups,meta,period,jiraUrl){
     const body=[{type:'TextBlock',text:'Jira Sprint Analysis',size:'Large',weight:'Bolder',wrap:true},
@@ -166,22 +178,22 @@
     const payload={type:'message',attachments:[{contentType:'application/vnd.microsoft.card.adaptive',contentUrl:null,content:{$schema:'http://adaptivecards.io/schemas/adaptive-card.json',type:'AdaptiveCard',version:'1.2',body,actions:[{type:'Action.OpenUrl',title:'打开 Jira 查询',url:jiraUrl}]}}]};
     return {payload,preview:lines.join('\n')+'\n\n打开 Jira 查询：'+jiraUrl};
   }
-  const core = {sprints,statusAt,rate,aggregate,csvCell,pageQuery,matchesSprint,filterGroups,rowsWithTotal,STATUS_NAMES,normalized,comparisonPeriod,selectStatusGroups,validateTeamsUrl,buildTeamsReport};
+  const core = {sprints,statusAt,rate,aggregate,csvCell,pageQuery,matchesSprint,filterGroups,rowsWithTotal,STATUS_NAMES,normalized,comparisonPeriod,selectStatusGroups,validateTeamsUrl,buildTeamsReport,teamsResponseInfo};
   if (typeof window === 'undefined' && typeof module === 'object' && module.exports) { module.exports = core; return; }
   // An older duplicate userscript may run first. Replace its panel rather than silently exiting.
   const existing=document.getElementById('jsa-host');
   if(existing){
     const previous=existing.dataset.jsaVersion||existing.shadowRoot?.querySelector('h1 small')?.textContent?.replace(/^v/,'')||'0.0.0';
-    const parts=v=>v.split('.').map(Number),a=parts(previous),b=parts('0.1.5');
+    const parts=v=>v.split('.').map(Number),a=parts(previous),b=parts('0.1.6');
     const comparison=a.reduce((r,n,i)=>r||n-(b[i]||0),0);
     if(comparison>=0)return;
     existing.remove();
   }
-  const host=document.createElement('div'); host.id='jsa-host';host.dataset.jsaVersion='0.1.5'; document.body.append(host);
+  const host=document.createElement('div'); host.id='jsa-host';host.dataset.jsaVersion='0.1.6'; document.body.append(host);
   const root=host.attachShadow({mode:'open'});
   root.innerHTML=`<style>
   :host{all:initial;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#172b4d}*{box-sizing:border-box}button,input,select{font:inherit}button{cursor:pointer;border:1px solid #c9d3e0;border-radius:6px;background:white;color:#172b4d;padding:7px 12px}button:hover{background:#edf3ff}.primary:hover,#launch:hover{background:#0747a6}#close{white-space:nowrap}button:disabled{opacity:.5;cursor:wait}.primary,#launch{background:#0052cc;color:white;border-color:#0052cc}#launch{position:fixed;right:24px;bottom:24px;z-index:2147483646;box-shadow:0 5px 20px #091e4240}#overlay{position:fixed;inset:0;background:#091e4260;z-index:2147483647;padding:3vh 3vw;display:none}#panel{background:#f7f9fc;border-radius:14px;max-width:1280px;margin:auto;height:94vh;overflow:auto;box-shadow:0 20px 80px #091e4255;padding:24px}header{display:flex;align-items:center;justify-content:space-between}h1{font-size:24px;margin:0}h2{font-size:17px;margin:0 0 12px}.muted{color:#5e6c84}p{margin:8px 0}.controls{display:flex;gap:16px;align-items:end;flex-wrap:wrap;margin:18px 0}label{display:flex;flex-direction:column;gap:5px}input,select{border:1px solid #b3bfd0;border-radius:5px;padding:7px;background:white;color:#172b4d}fieldset{margin:0;border:1px solid #b3bfd0;border-radius:6px;padding:8px;background:white;min-width:280px;max-width:100%}.choices{height:140px;overflow:auto;max-width:430px}.choices label{display:flex;flex-direction:row;align-items:center;gap:8px;padding:3px;cursor:pointer}.choices input{margin:0}.tools{display:flex;gap:8px;margin-bottom:5px}.tools button{padding:2px 8px}legend{padding:0 5px}.card{overflow-x:auto;background:white;border:1px solid #dfe5ed;border-radius:9px;margin:16px 0;padding:18px}.notice{padding:10px 14px;background:#eaf1ff;border-radius:6px}#message{white-space:pre-wrap}#message.error{background:#fff0ed;color:#ae2a19;padding:12px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{text-align:left;border-bottom:1px solid #e8ecf2;padding:9px 10px}th{background:#f4f6fa;color:#5e6c84}td button{border:0;padding:0;color:#0052cc;background:none;text-decoration:underline}.delta{font-variant-numeric:tabular-nums;font-weight:600}a{color:#0052cc}#detail{overflow:auto}small{font-size:12px}@media(max-width:650px){#panel{padding:14px}.controls{display:block}label{margin:10px 0}#sprints{min-width:0;width:100%}th,td{padding:6px}h1{font-size:20px}}
-  </style><button id="launch">◷ Sprint Analysis v0.1.5</button><div id="overlay"><section id="panel" role="dialog" aria-modal="true" aria-label="Sprint Analysis"><header><div><h1>Sprint Analysis <small class="muted">v0.1.5</small></h1><p class="muted"><span id="period-description"></span> · Asia/Shanghai（UTC+08:00）</p></div><button id="close" aria-label="关闭">关闭</button></header>
+  </style><button id="launch">◷ Sprint Analysis v0.1.6</button><div id="overlay"><section id="panel" role="dialog" aria-modal="true" aria-label="Sprint Analysis"><header><div><h1>Sprint Analysis <small class="muted">v0.1.6</small></h1><p class="muted"><span id="period-description"></span> · Asia/Shanghai（UTC+08:00）</p></div><button id="close" aria-label="关闭">关闭</button></header>
   <div class="notice">口径：以本次查询匹配的成员回溯对比时点的状态；不还原历史 Sprint 成员或历史筛选条件。已关闭 Sprint 也可能保留在任务 Sprint 字段中；同一任务可出现在多个 Sprint，各 Sprint 不可直接相加。</div>
   <div class="controls"><label>对比维度<select id="period"><option value="day">By day · 昨天 / 今天</option><option value="week">By week · 上周 / 本周（周一至周日）</option></select></label><button id="load">载入当前页面（全部分页）</button><fieldset id="sprint-box"><legend>Sprint（勾选，可多选）</legend><div class="tools"><button id="sprint-all" type="button">全选</button><button id="sprint-none" type="button">清空</button></div><div id="sprints" class="choices"></div></fieldset><fieldset id="status-box"><legend>状态（默认全部，可多选）</legend><label><input type="checkbox" id="status-all" checked>全部指定状态（以下 12 个）</label><p class="muted">直接勾选下面的状态即可切换为指定状态。</p><div id="statuses" class="choices"></div></fieldset><button id="run" class="primary">开始分析</button><button id="export" disabled>导出 CSV</button><button id="teams-config">Teams 配置</button><button id="teams-preview" disabled>预览并推送到 Teams</button></div>
   <p class="muted">统计当前页面查询的全部分页，不扩大到整个 Sprint。修改 Jira 搜索条件后请先点击 Search，再重新载入。若页面排除了已解决任务，完成数量也会受限。</p><p id="message" role="status">点击“载入当前页面”读取全部结果；本工具只读取 Jira，不修改任务。</p><div id="results"></div><div id="detail"></div></section></div>`;
@@ -333,6 +345,21 @@
       if(typeof GM_setValue!=='function')throw new Error('请通过 Tampermonkey 安装此脚本，才能保存配置。');
       GM_setValue('teams-config',{name:name.value.trim(),url:value});status.textContent='配置已保存，仅本地存储；未发送任何消息。';
     }catch(e){status.textContent=e.message;}});
+    const diagnose=teamsButton('teams-diagnose','连接诊断（HEAD，不推送）',()=>{
+      try{
+        const destination=validateTeamsUrl(url.value);
+        if(typeof GM_xmlhttpRequest!=='function')throw new Error('缺少 GM_xmlhttpRequest 权限，请重新安装最新版脚本。');
+        diagnose.disabled=true;status.textContent='正在检查 Webhook 连接，不发送消息…';
+        let settled=false,request;
+        const done=value=>{if(settled)return;settled=true;clearTimeout(timer);diagnose.disabled=false;status.textContent=value;};
+        const timer=setTimeout(()=>{done('HEAD 诊断超时。请检查当前浏览器网络、VPN/代理及油猴连接权限。未发送消息。');request?.abort?.();},15000);
+        try{request=GM_xmlhttpRequest({method:'HEAD',url:destination,anonymous:true,redirect:'error',timeout:15000,
+          onload:r=>done('HEAD 诊断：'+teamsResponseInfo(r)+'。'+(r.status>0?'已收到服务器响应，说明跨域请求可达；HEAD 不能证明 POST 认证或卡片投递成功。':'未收到有效 HTTP 响应。')+'未发送消息。'),
+          onerror:r=>done('HEAD 诊断失败：'+teamsResponseInfo(r)+'。请检查油猴脚本设置中的 api.powerplatform.com / logic.azure.com 域名授权及浏览器网络。未发送消息。'),
+          ontimeout:()=>done('HEAD 诊断超时；未发送消息。'),onabort:()=>done('HEAD 诊断已中止；未发送消息。')});}
+        catch(e){done('HEAD 诊断无法启动：'+teamsResponseInfo(e)+'。请重新安装最新版并接受连接权限。未发送消息。');}
+      }catch(e){status.textContent=e.message;}
+    });
     teamsButton('teams-clear','清除配置',()=>{if(typeof GM_deleteValue==='function')GM_deleteValue('teams-config');name.value='';url.value='';status.textContent='本地 Teams 配置已清除。';});
     teamsButton('teams-cancel','关闭',closeTeams);name.focus();
   }
@@ -363,11 +390,11 @@
         // One explicit POST only; do not auto-retry a possibly delivered message.
         try{request=GM_xmlhttpRequest({method:'POST',url:destination,headers:{'Content-Type':'application/json'},data,timeout:30000,anonymous:true,redirect:'error',
           onload:r=>{if(r.status>=200&&r.status<300)finish('Webhook 已接受请求（HTTP '+r.status+'）。请在 Teams 或工作流运行记录中确认投递；HTTP 成功不代表卡片已发布。');
-            else finish('Teams Webhook 返回 HTTP '+r.status+'；请检查工作流地址、认证方式及运行记录。未自动重试。');},
-          onerror:()=>finish('提交失败：请检查网络、油猴域名授权及工作流认证。投递结果可能未知；未自动重试。'),
+            else finish('Teams Webhook 返回：'+teamsResponseInfo(r)+'；请检查工作流地址、认证方式及运行记录。未自动重试。');},
+          onerror:r=>finish('提交失败：'+teamsResponseInfo(r)+'。请先用 Teams 配置中的 HEAD 连接诊断区分跨域权限/网络问题与 HTTP 错误。更新后需接受微软域名连接权限；投递结果可能未知，未自动重试。'),
           ontimeout:()=>finish('请求超时，投递结果未知。请先查看 Teams / 工作流运行记录，避免重复发送。'),
           onabort:()=>finish('请求已中止，投递结果未知。请先检查 Teams。')});}
-        catch{finish('无法提交请求，请检查油猴权限。未自动重试。');}
+        catch(e){finish('无法提交请求：'+teamsResponseInfo(e)+'。请检查油猴权限。未自动重试。');}
       });send.className='primary';cancel.focus();
     }catch(e){message(e.message,true);}
   }
