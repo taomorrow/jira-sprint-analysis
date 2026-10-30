@@ -1,6 +1,6 @@
 {
   "name": "jira-sprint-analysis",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Standalone Jira Sprint Analysis userscript",
   "scripts": {"test": "node --test", "check": "node --check jira-sprint-analysis.user.js"},

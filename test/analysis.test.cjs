@@ -5,9 +5,9 @@ const {JSDOM}=require('jsdom');
 const core=require('../jira-sprint-analysis.user.js');
 const cutoff=Date.parse('2026-10-29T00:00:00+08:00');
 const now=Date.parse('2026-10-29T15:00:00+08:00');
-function issue(key='DEMO-1') {return {key,fields:{summary:'<img src=x onerror=alert(1)>',created:'2026-10-27T09:00:00+08:00',updated:'2026-10-29T09:00:00+08:00',status:{id:'3',name:'Done'},customfield_1:[{id:7,name:'Demo Sprint',state:'active'}]},changelog:{startAt:0,total:2,histories:[{id:'1',created:'2026-10-28T10:00:00+08:00',items:[{field:'status',from:'1',fromString:'Open',to:'2',toString:'In Progress'}]},{id:'2',created:'2026-10-29T00:00:00+08:00',items:[{field:'status',from:'2',fromString:'In Progress',to:'3',toString:'Done'}]}]}};}
+function issue(key='DEMO-1') {return {key,fields:{summary:'<img src=x onerror=alert(1)>',created:'2026-10-27T09:00:00+08:00',updated:'2026-10-29T09:00:00+08:00',status:{id:'3',name:'Completed'},customfield_1:[{id:7,name:'Demo Sprint',state:'active'}]},changelog:{startAt:0,total:2,histories:[{id:'1',created:'2026-10-28T10:00:00+08:00',items:[{field:'status',from:'1',fromString:'Open',to:'2',toString:'In Progress'}]},{id:'2',created:'2026-10-29T00:00:00+08:00',items:[{field:'status',from:'2',fromString:'In Progress',to:'3',toString:'Completed'}]}]}};}
 test('exclusive midnight and multiple historical transitions',()=>{
- const i=issue();assert.equal(core.statusAt(i,cutoff,false).name,'In Progress');assert.equal(core.statusAt(i,cutoff).name,'Done');assert.equal(core.statusAt(i,cutoff-86400000,false).name,'Open');
+ const i=issue();assert.equal(core.statusAt(i,cutoff,false).name,'In Progress');assert.equal(core.statusAt(i,cutoff).name,'Completed');assert.equal(core.statusAt(i,cutoff-86400000,false).name,'Open');
  assert.equal(core.statusAt(i,Date.parse('2026-10-26T00:00:00Z')),null);
  i.fields.created='2026-10-29T00:00:00+08:00';assert.equal(core.statusAt(i,cutoff,false),null);
 });
@@ -33,7 +33,7 @@ async function fixture({truncated=false,fail=false,mismatch=false,multi=false,be
  const i=issue();i.fields.created='2020-01-01T00:00:00+08:00';
  w.fetch=async path=>{calls.push(path);const u=new URL(path,w.location.origin);let data;
  if(u.pathname.endsWith('/field'))data=[{id:'customfield_1',schema:{custom:'com.pyxis.greenhopper.jira:gh-sprint'}}];
- else if(u.pathname.endsWith('/status'))data=[{id:'1',name:'Open'},{id:'2',name:'In Progress'},{id:'3',name:'Done'},{id:'4',name:'SIT'}];
+ else if(u.pathname.endsWith('/status'))data=[{id:'1',name:'Open'},{id:'2',name:'In Progress'},{id:'3',name:'Completed'},{id:'4',name:'SIT'}];
  else if(u.pathname.endsWith('/search')){const start=Number(u.searchParams.get('startAt'));data={total:2,issues:[{...i,key:start===0?'DEMO-1':'DEMO-2',fields:{...i.fields,customfield_1:multi&&start===1?[{id:8,name:'Other Sprint',state:'future'}]:i.fields.customfield_1}}]};}
  else if(u.pathname.endsWith('/changelog')){if(fail)return {ok:false,status:404};data={total:2,values:i.changelog.histories};}
  else {detailCalls++;data=JSON.parse(JSON.stringify(i));data.key=u.pathname.split('/').at(-1);if(multi&&data.key==='DEMO-2')data.fields.customfield_1=[{id:8,name:'Other Sprint',state:'future'}];if(mismatch)data.fields.updated='2026-10-29T01:00:00.000Z';if(truncated)data.changelog.histories=data.changelog.histories.slice(0,1);}
@@ -88,18 +88,18 @@ test('Sprint checkboxes exclude unrelated tasks before loading histories',async(
 });
 test('selected statuses use independent yesterday/today totals, include transitions out',async()=>{
  const f=await fixture({beforeRun(root){
- root.getElementById('status-all').click();root.querySelector('#statuses input[value="2"]').click();
+ root.getElementById('status-all').click();root.querySelector('#statuses input[value="in progress"]').click();
  }});
  const result=f.root.getElementById('results');
  const labels=[...result.querySelectorAll('tr td:first-child')].map(x=>x.textContent);
- assert.ok(labels.includes('In Progress'));assert.ok(!labels.includes('Done'));
+ assert.ok(labels.includes('In Progress'));assert.ok(!labels.includes('Completed'));
  const total=[...result.querySelectorAll('tr')].at(-1);
  assert.deepEqual([...total.querySelectorAll('td')].map(x=>x.textContent),['所选状态合计','2','0','-2','-100.0%']);
- result.querySelector('button').click();assert.match(f.root.getElementById('detail').textContent,/In Progress → Done/);
+ result.querySelector('button').click();assert.match(f.root.getElementById('detail').textContent,/In Progress → Completed/);
  f.dom.window.close();
 });
 test('clicking a named status from default All selects that status, not every other status',async()=>{
- const f=await fixture({beforeRun(root){root.querySelector('#statuses input[value="2"]').click();}});
+ const f=await fixture({beforeRun(root){root.querySelector('#statuses input[value="in progress"]').click();}});
  const labels=[...f.root.getElementById('results').querySelectorAll('tr td:first-child')].map(x=>x.textContent);
  assert.deepEqual(labels,['In Progress','所选状态合计']);
  f.dom.window.close();
@@ -110,14 +110,14 @@ test('198-result paging, Sprint + two statuses and CSV use the same selected sco
  // Jira pages may define a global module; that must not disable the userscript.
  w.module={exports:{}};
  const samples=Array.from({length:198},(_,n)=>{
- const i=issue('DEMO-'+(n+1));const before=['2','4','1','2'][n%4],after=['4','3','2','2'][n%4],names={'1':'Open','2':'In Progress','3':'Done','4':'SIT'};
+ const i=issue('DEMO-'+(n+1));const before=['2','4','1','2'][n%4],after=['4','3','2','2'][n%4],names={'1':'Open','2':'In Progress','3':'Completed','4':'SIT'};
  i.fields.status={id:after,name:names[after]};i.fields.customfield_1=[{id:n<4?7:8,name:n<4?'Selected Sprint':'Excluded Sprint',state:n<4?'active':'future'}];
  i.changelog={total:1,startAt:0,histories:[{id:'1',created:'2026-10-29T08:00:00+08:00',items:[{field:'status',from:before,fromString:names[before],to:after,toString:names[after]}]}]};return i;
  });
  const starts=[],details=[];
  w.fetch=async path=>{const u=new URL(path,w.location.origin);let data;
  if(u.pathname.endsWith('/field'))data=[{id:'customfield_1',schema:{custom:'com.pyxis.greenhopper.jira:gh-sprint'}}];
- else if(u.pathname.endsWith('/status'))data=[{id:'1',name:'Open'},{id:'2',name:'In Progress'},{id:'3',name:'Done'},{id:'4',name:'SIT'}];
+ else if(u.pathname.endsWith('/status'))data=[{id:'1',name:'Open'},{id:'2',name:'In Progress'},{id:'3',name:'Completed'},{id:'4',name:'SIT'}];
  else if(u.pathname.endsWith('/search')){const start=Number(u.searchParams.get('startAt'));starts.push(start);data={total:198,issues:samples.slice(start,start+50)};}
  else{const key=u.pathname.split('/').at(-1);details.push(key);data=samples.find(i=>i.key===key);}
  return {ok:true,headers:{get:()=> 'application/json'},json:async()=>structuredClone(data)};};
@@ -126,15 +126,45 @@ test('198-result paging, Sprint + two statuses and CSV use the same selected sco
  // Reproduce an old panel winning the previous early-return check.
  const old=w.document.createElement('div');old.id='jsa-host';old.attachShadow({mode:'open'}).innerHTML='<h1><small>v0.1.1</small></h1>';w.document.body.append(old);
  w.eval(source);const root=w.document.getElementById('jsa-host').shadowRoot;
- assert.match(root.getElementById('launch').textContent,/0.1.3/);assert.equal(old.isConnected,false);
+ assert.match(root.getElementById('launch').textContent,/0.1.4/);assert.equal(old.isConnected,false);
  async function click(id){root.getElementById(id).click();for(let n=0;n<500&&root.getElementById('run').disabled;n++)await new Promise(r=>setTimeout(r,1));assert.equal(root.getElementById('run').disabled,false);}
  await click('load');
- root.querySelector('#statuses input[value="2"]').click();root.querySelector('#statuses input[value="4"]').click();
+ root.querySelector('#statuses input[value="in progress"]').click();root.querySelector('#statuses input[value="sit"]').click();
  await click('run');
  assert.deepEqual(starts,[0,50,100,150,0,50,100,150]);assert.deepEqual(details.sort(),['DEMO-1','DEMO-2','DEMO-3','DEMO-4']);
  const rows=[...root.querySelectorAll('#results tr')].slice(1).map(r=>[...r.querySelectorAll('td')].map(x=>x.textContent));
  assert.deepEqual(rows,[['In Progress','2','2','0','0.0%'],['SIT','1','1','0','0.0%'],['所选状态合计','3','3','0','0.0%']]);
- await click('export');assert.ok(exported.includes('"In Progress","2","2"'));assert.ok(exported.includes('"SIT","1","1"'));assert.ok(!exported.includes('Excluded Sprint'));assert.ok(!exported.includes('"Done"'));
+ await click('export');assert.ok(exported.includes('"In Progress","2","2"'));assert.ok(exported.includes('"SIT","1","1"'));assert.ok(!exported.includes('Excluded Sprint'));assert.ok(!exported.includes('"Completed"'));
  w.eval(source);assert.equal(w.document.querySelectorAll('#jsa-host').length,1);
  dom.window.close();
+});
+
+test('week boundaries use Shanghai Monday through Sunday, including year rollover',()=>{
+ const friday=core.comparisonPeriod(Date.parse('2026-10-30T15:00:00+08:00'),'week');
+ assert.equal(friday.cutoff,Date.parse('2026-10-26T00:00:00+08:00'));
+ assert.match(friday.description,/2026-10-19～2026-10-25/);assert.match(friday.description,/2026-10-26～2026-11-01/);
+ assert.equal(core.comparisonPeriod(Date.parse('2026-11-01T23:59:59+08:00'),'week').cutoff,friday.cutoff);
+ assert.equal(core.comparisonPeriod(Date.parse('2026-11-02T00:00:00+08:00'),'week').cutoff,Date.parse('2026-11-02T00:00:00+08:00'));
+ assert.match(core.comparisonPeriod(Date.parse('2027-01-01T12:00:00+08:00'),'week').description,/2026-12-28～2027-01-03/);
+ assert.equal(core.comparisonPeriod(now,'day').cutoff,cutoff);
+});
+test('only the 12 requested statuses are available; comparison mode invalidates previous output',async()=>{
+ const f=await fixture();
+ const labels=[...f.root.querySelectorAll('#statuses label')].map(x=>x.textContent);
+ assert.deepEqual(labels,core.STATUS_NAMES);assert.equal(labels.length,12);
+ assert.ok(!f.calls.some(c=>c.includes('/status')));
+ f.root.getElementById('period').value='week';f.root.getElementById('period').dispatchEvent(new f.dom.window.Event('change'));
+ assert.equal(f.root.getElementById('export').disabled,true);await f.click('run');
+ const headers=[...f.root.querySelectorAll('#results th')].map(x=>x.textContent);
+ assert.deepEqual(headers,['状态','上周日终','本周截至当前','增减','周环比']);
+ assert.match(f.root.getElementById('results').textContent,/By week/);
+ const weekRows=[...f.root.querySelectorAll('#results tr')].slice(1).map(r=>[...r.querySelectorAll('td')].map(x=>x.textContent));
+ assert.deepEqual(weekRows,[['Completed','0','2','+2','新增'],['Open','2','0','-2','-100.0%'],['所选状态合计','2','2','0','0.0%']]);
+ f.dom.window.close();
+});
+test('fixed statuses exclude others, merge case variants and preserve zero selections',()=>{
+ const a=issue(),b=issue('DEMO-2');a.fields.status={id:'90',name:'IN PROGRESS'};a.changelog={histories:[]};b.fields.status={id:'91',name:'Cancelled'};b.changelog={histories:[]};
+ const source=core.aggregate([a,b],'customfield_1',['7'],cutoff,now);
+ const [all]=core.selectStatusGroups(source,null);assert.equal(all.issues.length,1);assert.equal(all.rows.size,1);
+ const [filtered]=core.selectStatusGroups(source,['in progress','sit']);assert.equal(filtered.rows.get('sit').after.length,0);assert.equal(filtered.rows.get('in progress').after.length,1);
 });

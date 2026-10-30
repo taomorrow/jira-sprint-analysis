@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira Sprint Analysis
 // @namespace    https://github.com/taomorrow/jira-sprint-analysis
-// @version      0.1.3
+// @version      0.1.4
 // @description  按 Sprint 对比昨日与今日状态，查看变化明细并导出 CSV。
 // @author       taomorrow
 // @match        https://jira.xpaas.lenovo.com/*
@@ -14,6 +14,35 @@
 (function () {
   'use strict';
   const NONE = '∅';
+  const STATUS_NAMES=['Completed','DEPLOYED','Grooming','In Progress','New','Open','Ready For Deploy','Ready For Test','Ready For UAT','SIT','Testing','UAT'];
+  const normalized=name=>String(name||'').trim().replace(/\s+/g,' ').toLowerCase();
+  function comparisonPeriod(now,mode='day'){
+    const day=86400000,offset=8*3600000;
+    const date=t=>new Date(t+offset).toISOString().slice(0,10);
+    const midnight=Date.parse(date(now)+'T00:00:00+08:00');
+    if(mode==='week'){
+      const weekday=new Date(midnight+offset).getUTCDay();
+      const monday=midnight-((weekday+6)%7)*day;
+      return {cutoff:monday,before:'上周日终',after:'本周截至当前',rate:'周环比',created:'本周创建',
+        description:`By week｜上周 ${date(monday-7*day)}～${date(monday-day)}（周日结束时） → 本周 ${date(monday)}～${date(monday+6*day)}（截至当前，未满周）`};
+    }
+    return {cutoff:midnight,before:'昨日日终',after:'今日截至当前',rate:'日环比',created:'今日创建',
+      description:`By day｜昨日 ${date(midnight-day)}（日终） → 今日 ${date(now)}（截至当前）`};
+  }
+  function selectStatusGroups(source,selection){
+    const names=selection===null?STATUS_NAMES:STATUS_NAMES.filter(n=>selection.includes(normalized(n)));
+    const allowed=new Map(names.map(n=>[normalized(n),n]));
+    return source.map(g=>{
+      const rows=new Map();
+      for(const row of g.rows.values()){
+        const key=normalized(row.name);if(!allowed.has(key))continue;
+        if(!rows.has(key))rows.set(key,{id:key,name:allowed.get(key),before:[],after:[]});
+        rows.get(key).before.push(...row.before);rows.get(key).after.push(...row.after);
+      }
+      if(selection!==null)for(const [id,name] of allowed)if(!rows.has(id))rows.set(id,{id,name,before:[],after:[]});
+      return {...g,rows,issues:g.issues.filter(x=>allowed.has(normalized(x.before?.name))||allowed.has(normalized(x.after?.name)))};
+    });
+  }
   function sprints(value) {
     return (Array.isArray(value) ? value : value ? [value] : []).map(v => {
       if (typeof v === 'object' && v !== null) {
@@ -101,26 +130,27 @@
     if(filter && /^\d+$/.test(filter)) return {filter,source:'当前页面查询（从页面筛选器解析）'};
     throw new Error('无法识别当前页面的查询条件。请在 Jira 问题列表点击 Search，或切换 Advanced 后重新载入。');
   }
-  const core = {sprints,statusAt,rate,aggregate,csvCell,pageQuery,matchesSprint,filterGroups,rowsWithTotal};
+  const core = {sprints,statusAt,rate,aggregate,csvCell,pageQuery,matchesSprint,filterGroups,rowsWithTotal,STATUS_NAMES,normalized,comparisonPeriod,selectStatusGroups};
   if (typeof window === 'undefined' && typeof module === 'object' && module.exports) { module.exports = core; return; }
   // An older duplicate userscript may run first. Replace its panel rather than silently exiting.
   const existing=document.getElementById('jsa-host');
   if(existing){
     const previous=existing.dataset.jsaVersion||existing.shadowRoot?.querySelector('h1 small')?.textContent?.replace(/^v/,'')||'0.0.0';
-    const parts=v=>v.split('.').map(Number),a=parts(previous),b=parts('0.1.3');
+    const parts=v=>v.split('.').map(Number),a=parts(previous),b=parts('0.1.4');
     const comparison=a.reduce((r,n,i)=>r||n-(b[i]||0),0);
     if(comparison>=0)return;
     existing.remove();
   }
-  const host=document.createElement('div'); host.id='jsa-host';host.dataset.jsaVersion='0.1.3'; document.body.append(host);
+  const host=document.createElement('div'); host.id='jsa-host';host.dataset.jsaVersion='0.1.4'; document.body.append(host);
   const root=host.attachShadow({mode:'open'});
   root.innerHTML=`<style>
   :host{all:initial;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#172b4d}*{box-sizing:border-box}button,input,select{font:inherit}button{cursor:pointer;border:1px solid #c9d3e0;border-radius:6px;background:white;color:#172b4d;padding:7px 12px}button:hover{background:#edf3ff}.primary:hover,#launch:hover{background:#0747a6}#close{white-space:nowrap}button:disabled{opacity:.5;cursor:wait}.primary,#launch{background:#0052cc;color:white;border-color:#0052cc}#launch{position:fixed;right:24px;bottom:24px;z-index:2147483646;box-shadow:0 5px 20px #091e4240}#overlay{position:fixed;inset:0;background:#091e4260;z-index:2147483647;padding:3vh 3vw;display:none}#panel{background:#f7f9fc;border-radius:14px;max-width:1280px;margin:auto;height:94vh;overflow:auto;box-shadow:0 20px 80px #091e4255;padding:24px}header{display:flex;align-items:center;justify-content:space-between}h1{font-size:24px;margin:0}h2{font-size:17px;margin:0 0 12px}.muted{color:#5e6c84}p{margin:8px 0}.controls{display:flex;gap:16px;align-items:end;flex-wrap:wrap;margin:18px 0}label{display:flex;flex-direction:column;gap:5px}input,select{border:1px solid #b3bfd0;border-radius:5px;padding:7px;background:white;color:#172b4d}fieldset{margin:0;border:1px solid #b3bfd0;border-radius:6px;padding:8px;background:white;min-width:280px;max-width:100%}.choices{height:140px;overflow:auto;max-width:430px}.choices label{display:flex;flex-direction:row;align-items:center;gap:8px;padding:3px;cursor:pointer}.choices input{margin:0}.tools{display:flex;gap:8px;margin-bottom:5px}.tools button{padding:2px 8px}legend{padding:0 5px}.card{overflow-x:auto;background:white;border:1px solid #dfe5ed;border-radius:9px;margin:16px 0;padding:18px}.notice{padding:10px 14px;background:#eaf1ff;border-radius:6px}#message{white-space:pre-wrap}#message.error{background:#fff0ed;color:#ae2a19;padding:12px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{text-align:left;border-bottom:1px solid #e8ecf2;padding:9px 10px}th{background:#f4f6fa;color:#5e6c84}td button{border:0;padding:0;color:#0052cc;background:none;text-decoration:underline}.delta{font-variant-numeric:tabular-nums;font-weight:600}a{color:#0052cc}#detail{overflow:auto}small{font-size:12px}@media(max-width:650px){#panel{padding:14px}.controls{display:block}label{margin:10px 0}#sprints{min-width:0;width:100%}th,td{padding:6px}h1{font-size:20px}}
-  </style><button id="launch">◷ Sprint Analysis v0.1.3</button><div id="overlay"><section id="panel" role="dialog" aria-modal="true" aria-label="Sprint Analysis"><header><div><h1>Sprint Analysis <small class="muted">v0.1.3</small></h1><p class="muted">昨日日终 → 今日截至查询时 · Asia/Shanghai（UTC+08:00）</p></div><button id="close" aria-label="关闭">关闭</button></header>
-  <div class="notice">口径：以本次查询匹配的成员回溯昨日状态；不还原历史 Sprint 成员或历史筛选条件。已关闭 Sprint 也可能保留在任务 Sprint 字段中；同一任务可出现在多个 Sprint，各 Sprint 不可直接相加。</div>
-  <div class="controls"><button id="load">载入当前页面（全部分页）</button><fieldset id="sprint-box"><legend>Sprint（勾选，可多选）</legend><div class="tools"><button id="sprint-all" type="button">全选</button><button id="sprint-none" type="button">清空</button></div><div id="sprints" class="choices"></div></fieldset><fieldset id="status-box"><legend>状态（默认全部，可多选）</legend><label><input type="checkbox" id="status-all" checked>全部状态（含历史状态）</label><p class="muted">直接勾选下面的状态即可切换为指定状态。</p><div id="statuses" class="choices"></div></fieldset><button id="run" class="primary">开始分析</button><button id="export" disabled>导出 CSV</button></div>
+  </style><button id="launch">◷ Sprint Analysis v0.1.4</button><div id="overlay"><section id="panel" role="dialog" aria-modal="true" aria-label="Sprint Analysis"><header><div><h1>Sprint Analysis <small class="muted">v0.1.4</small></h1><p class="muted"><span id="period-description"></span> · Asia/Shanghai（UTC+08:00）</p></div><button id="close" aria-label="关闭">关闭</button></header>
+  <div class="notice">口径：以本次查询匹配的成员回溯对比时点的状态；不还原历史 Sprint 成员或历史筛选条件。已关闭 Sprint 也可能保留在任务 Sprint 字段中；同一任务可出现在多个 Sprint，各 Sprint 不可直接相加。</div>
+  <div class="controls"><label>对比维度<select id="period"><option value="day">By day · 昨天 / 今天</option><option value="week">By week · 上周 / 本周（周一至周日）</option></select></label><button id="load">载入当前页面（全部分页）</button><fieldset id="sprint-box"><legend>Sprint（勾选，可多选）</legend><div class="tools"><button id="sprint-all" type="button">全选</button><button id="sprint-none" type="button">清空</button></div><div id="sprints" class="choices"></div></fieldset><fieldset id="status-box"><legend>状态（默认全部，可多选）</legend><label><input type="checkbox" id="status-all" checked>全部指定状态（以下 12 个）</label><p class="muted">直接勾选下面的状态即可切换为指定状态。</p><div id="statuses" class="choices"></div></fieldset><button id="run" class="primary">开始分析</button><button id="export" disabled>导出 CSV</button></div>
   <p class="muted">统计当前页面查询的全部分页，不扩大到整个 Sprint。修改 Jira 搜索条件后请先点击 Search，再重新载入。若页面排除了已解决任务，完成数量也会受限。</p><p id="message" role="status">点击“载入当前页面”读取全部结果；本工具只读取 Jira，不修改任务。</p><div id="results"></div><div id="detail"></div></section></div>`;
-  const $=id=>root.getElementById(id); let field, groups=[], busy=false, reportMeta='', loadedQuery='';
+  const $=id=>root.getElementById(id); let field, groups=[], busy=false, reportMeta='', loadedQuery='', activePeriod=comparisonPeriod(Date.now());
+  $('period-description').textContent=activePeriod.description;
   const message=(s,error=false)=>{ $('message').textContent=s; $('message').className=error?'error':''; };
   function text(tag,content,parent){const e=document.createElement(tag); e.textContent=content; parent.append(e); return e;}
   async function api(path) {
@@ -181,7 +211,7 @@
     return full;
   }
   async function guard(job){
-    if(busy)return;busy=true;const controls=['load','run','sprint-box','status-box'];controls.forEach(id=>$(id).disabled=true);$('export').disabled=true;
+    if(busy)return;busy=true;const controls=['load','run','sprint-box','status-box','period'];controls.forEach(id=>$(id).disabled=true);$('export').disabled=true;
     groups=[];$('results').replaceChildren();$('detail').replaceChildren();
     try{await job();}catch(e){message(e.name==='AbortError'?'请求超过 30 秒，请检查网络或 VPN 后重试。':e.message,true);}finally{busy=false;controls.forEach(id=>$(id).disabled=false);$('export').disabled=!groups.length;}
   }
@@ -191,6 +221,7 @@
     const label=document.createElement('label'), input=document.createElement('input');input.type='checkbox';input.value=id;input.checked=checked;label.append(input,document.createTextNode(name));parent.append(label);
   }
   function invalidate(){if(busy)return;groups=[];$('results').replaceChildren();$('detail').replaceChildren();$('export').disabled=true;message(`已选择 ${selected().length} 个 Sprint；状态：${$('status-all').checked?'全部':selectedStatuses().length+' 项'}。请点击“开始分析”。`);}
+  $('period').onchange=()=>{$('period-description').textContent=comparisonPeriod(Date.now(),$('period').value).description;invalidate();};
   $('sprints').onchange=invalidate;
   $('statuses').onchange=()=>{$('status-all').checked=false;invalidate();};
   $('status-all').onchange=()=>{for(const x of $('statuses').querySelectorAll('input'))x.checked=false;invalidate();};
@@ -203,19 +234,14 @@
     const options=[...map.values()].sort((a,b)=>(/active/i.test(b.state)?1:0)-(/active/i.test(a.state)?1:0)||b.name.localeCompare(a.name));
     for(const s of options)choice($('sprints'),s.id,`${s.name}${s.state?' · '+s.state:''} [${s.id}]`,/^active$/i.test(s.state));
     if(!selected().length&&$('sprints').querySelector('input'))$('sprints').querySelector('input').checked=true;
-    const statuses=new Map();
-    // Fetch workflow statuses so users can select SIT even when its current count is zero.
-    const catalog=await api('/rest/api/2/status');
-    for(const st of catalog)statuses.set(String(st.id),st.name);
-    for(const i of issues)statuses.set(String(i.fields.status.id),i.fields.status.name);
     $('statuses').replaceChildren();$('status-all').checked=true;
-    for(const [id,name] of [...statuses].sort((a,b)=>a[1].localeCompare(b[1])))choice($('statuses'),id,name,false);
+    for(const name of STATUS_NAMES)choice($('statuses'),normalized(name),name,false);
     loadedQuery=query;
     message(`已读取当前页面全部 ${issues.length} 条任务、${options.length} 个 Sprint 分组。可多选后分析。\nJQL：${loadedQuery}${issues.length?'':'（当前页面没有可见任务）'}`);
   }
   function details(title,items){
     const box=$('detail');box.replaceChildren();box.className='card';text('h2',title,box);
-    const table=document.createElement('table');box.append(table);const tr=document.createElement('tr');table.append(tr);['Issue','摘要','昨日 → 今日'].forEach(h=>text('th',h,tr));
+    const table=document.createElement('table');box.append(table);const tr=document.createElement('tr');table.append(tr);['Issue','摘要',activePeriod.before+' → '+activePeriod.after].forEach(h=>text('th',h,tr));
     for(const x of items){const row=document.createElement('tr');table.append(row);const td=document.createElement('td');row.append(td);const a=text('a',x.issue.key,td);a.href='/browse/'+encodeURIComponent(x.issue.key);a.target='_blank';a.rel='noopener noreferrer';text('td',x.issue.fields.summary,row);text('td',`${x.before?.name||'尚未创建'} → ${x.after?.name||'尚未创建'}`,row);}
     if(!items.length)text('p','没有对应任务。',box);
     box.scrollIntoView({block:'nearest',behavior:'smooth'});
@@ -225,10 +251,10 @@
     for(const g of groups){
       const card=document.createElement('section');card.className='card';result.append(card);text('h2',g.name+' · '+g.id,card);
       const changes=g.issues.filter(x=>x.changed), created=g.issues.filter(x=>!x.before&&x.after);
-      const detail=text('button',`查看变化 ${changes.length} 条（今日创建 ${created.length} 条）`,card);detail.onclick=()=>details(g.name+' · 净状态变化 / 新建任务',changes);
-      const table=document.createElement('table');card.append(table);const head=document.createElement('tr');table.append(head);['状态','昨日','今日','增减','日环比'].forEach(h=>text('th',h,head));
+      const detail=text('button',`查看变化 ${changes.length} 条（${activePeriod.created} ${created.length} 条）`,card);detail.onclick=()=>details(g.name+' · 净状态变化 / 新建任务',changes);
+      const table=document.createElement('table');card.append(table);const head=document.createElement('tr');table.append(head);['状态',activePeriod.before,activePeriod.after,'增减',activePeriod.rate].forEach(h=>text('th',h,head));
       const rows=rowsWithTotal(g);
-      for(const r of rows){const tr=document.createElement('tr');table.append(tr);text('td',r.name,tr);for(const side of ['before','after']){const td=document.createElement('td');tr.append(td);const b=text('button',String(r[side].length),td);b.onclick=()=>{const keys=new Set(r[side].map(i=>i.key));details(`${g.name} · ${r.name} · ${side==='before'?'昨日':'今日'}`,g.issues.filter(x=>keys.has(x.issue.key)));};}const delta=r.after.length-r.before.length;text('td',(delta>0?'+':'')+delta,tr).className='delta';text('td',rate(r.before.length,r.after.length),tr);}
+      for(const r of rows){const tr=document.createElement('tr');table.append(tr);text('td',r.name,tr);for(const side of ['before','after']){const td=document.createElement('td');tr.append(td);const b=text('button',String(r[side].length),td);b.onclick=()=>{const keys=new Set(r[side].map(i=>i.key));details(`${g.name} · ${r.name} · ${side==='before'?activePeriod.before:activePeriod.after}`,g.issues.filter(x=>keys.has(x.issue.key)));};}const delta=r.after.length-r.before.length;text('td',(delta>0?'+':'')+delta,tr).className='delta';text('td',rate(r.before.length,r.after.length),tr);}
     }
   }
   async function run(){
@@ -236,22 +262,16 @@
     const statusIds=selectedStatuses();if(statusIds!==null&&!statusIds.length)throw new Error('请至少选择一个状态，或勾选全部状态。');
     const jql=await currentQuery();
     if(jql!==loadedQuery)throw new Error('当前页面查询已改变，请重新“载入当前页面”后再分析。');
-    const now=Date.now(), date=new Date(now+8*3600000).toISOString().slice(0,10), cutoff=Date.parse(date+'T00:00:00+08:00');
+    const now=Date.now();activePeriod=comparisonPeriod(now,$('period').value);const cutoff=activePeriod.cutoff;
+    $('period-description').textContent=activePeriod.description;
     const pageIssues=await search(jql), issues=pageIssues.filter(i=>matchesSprint(i,field,ids)), full=new Array(issues.length);let cursor=0,done=0,failed;
     await Promise.all(Array.from({length:Math.min(3,issues.length)},async()=>{while(cursor<issues.length&&!failed){const i=cursor++;try{full[i]=await history(issues[i]);message(`读取完整历史 ${++done} / ${issues.length}…`);}catch(e){failed=e;}}}));
     if(failed)throw failed;
     const scoped=full.filter(i=>matchesSprint(i,field,ids));
     const allGroups=aggregate(scoped,field,ids,cutoff,now);
-    // Offer historical statuses after reading changelogs; keep explicit selection unchanged.
-    const known=new Set([...$('statuses').querySelectorAll('input')].map(x=>x.value));
-    for(const g of allGroups)for(const [id,row] of g.rows)if(!known.has(id)){choice($('statuses'),id,row.name,false);known.add(id);}
-    if(statusIds!==null)for(const g of allGroups)for(const id of statusIds)if(!g.rows.has(id)){
-      const input=[...$('statuses').querySelectorAll('input')].find(x=>x.value===id);
-      g.rows.set(id,{id,name:input?.parentElement.textContent||id,before:[],after:[]});
-    }
-    const calculated=filterGroups(allGroups,statusIds);
-    const stateNames=statusIds===null?'全部状态':[...$('statuses').querySelectorAll('input:checked')].map(x=>x.parentElement.textContent).join('、');
-    reportMeta=`查询开始 ${new Date(now).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})}（上海）｜昨日截止：${date} 00:00 之前｜当前页面全部分页｜JQL：${jql}｜所选 Sprint：${ids.join("、")}｜状态：${stateNames}｜当前成员回溯`;
+    const calculated=selectStatusGroups(allGroups,statusIds);
+    const stateNames=statusIds===null?'全部指定的 12 个状态':[...$('statuses').querySelectorAll('input:checked')].map(x=>x.parentElement.textContent).join('、');
+    reportMeta=`查询开始 ${new Date(now).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false})}（上海）｜${activePeriod.description}｜当前页面全部分页｜JQL：${jql}｜所选 Sprint：${ids.join("、")}｜状态：${stateNames}｜当前成员回溯`;
     groups=calculated;render();message(`分析完成：页面共 ${pageIssues.length} 条；所选 Sprint 匹配 ${scoped.length} 条；所选状态涉及 ${new Set(groups.flatMap(g=>g.issues.map(x=>x.issue.key))).size} 条，${groups.length} 个 Sprint 分组。合计仅包含所选状态。`);
   }
   $('load').onclick=()=>guard(load);$('run').onclick=()=>guard(run);
@@ -260,7 +280,7 @@
   const close=()=>{$('overlay').style.display='none';lastFocus?.focus();};$('close').onclick=close;
   root.addEventListener('keydown',e=>{if(e.key==='Escape')close();if(e.key==='Tab'&&$('overlay').style.display==='block'){const nodes=[...$('panel').querySelectorAll('button,input,select,a')].filter(x=>!x.disabled);const first=nodes[0],last=nodes.at(-1);if(e.shiftKey&&root.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&root.activeElement===last){e.preventDefault();first.focus();}}});
   $('export').onclick=()=>{
-    const rows=[['统计说明',reportMeta],['Sprint ID','Sprint','状态','昨日','今日','增减','日环比']];
+    const rows=[['统计说明',reportMeta],['Sprint ID','Sprint','状态',activePeriod.before,activePeriod.after,'增减',activePeriod.rate]];
     for(const g of groups){const stats=rowsWithTotal(g);for(const r of stats)rows.push([g.id,g.name,r.name,r.before.length,r.after.length,r.after.length-r.before.length,rate(r.before.length,r.after.length)]);}
     const blob=new Blob(['\ufeff'+rows.map(r=>r.map(csvCell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='jira-sprint-analysis-'+new Date().toISOString().slice(0,10)+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
