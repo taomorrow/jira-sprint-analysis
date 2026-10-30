@@ -9,10 +9,28 @@
 3. 登录 Jira，打开需要统计的问题列表页面，刷新后点击右下角 **Sprint Analysis**。
 4. 点击 **载入当前页面（全部分页）**，勾选一个或多个 Sprint；状态默认全部，也可取消“全部状态”后勾选 IN PROGRESS、SIT 等状态，再点击 **开始分析**。
 5. 修改 Sprint 或状态勾选后，旧结果和导出会失效，点击 **开始分析** 重新计算。
-6. 确认右下角入口和面板版本为 **v0.1.4**。若仍是旧版，可从对应 Release 下载 `.user.js` 安装更新并刷新 Jira；同一页面新版会替换旧面板。
+6. 确认右下角入口和面板版本为 **v0.1.5**。若仍是旧版，可从对应 Release 下载 `.user.js` 安装更新并刷新 Jira；同一页面新版会替换旧面板。
 7. 点击状态数量查看对应任务；点击“查看变化”查看两时点状态不同或今日新建的任务；支持导出带 UTF-8 BOM 的 CSV。
 
-脚本仅匹配配置的 Jira 域名，不依赖其他 Jira 脚本，不修改任务，不需要填写 Token，也不向 GitHub 或第三方服务上传 Jira 数据。自动更新由油猴管理器根据脚本头部的 GitHub 地址检查。
+脚本仅匹配配置的 Jira 域名，不依赖其他 Jira 脚本，不修改任务，日常分析不需要填写 Token，不向 GitHub 上传 Jira 数据。仅在用户配置 Teams 并在预览中确认推送后，才向该 Workflows 地址发送报告。自动更新由油猴管理器根据脚本头部的 GitHub 地址检查。
+
+## Teams 配置、预览与推送
+
+1. 更新安装 v0.1.5，接受油猴所需的菜单、脚本存储及微软 Workflows 域名跨域请求权限，再刷新 Jira。
+2. 在 Teams 的目标频道/聊天创建 Workflows，例如“收到 Webhook 请求时发布卡片”，复制生成的 URL。使用接收 Adaptive Card 的模板，工作流须能处理 `type: message` 与 `attachments[].content`；自定义工作流需把附件 content 传给发布卡片步骤。
+3. 从 **油猴菜单 → Teams 配置**，或分析面板里的 **Teams 配置**，填写目标名称和 Webhook URL，保存。配置不会发起联网测试，也不会立即推送。
+4. 完成分析后点击 **预览并推送到 Teams**，核对目标名称、主机和完整报告内容，再点击 **确认推送**。取消预览不会发送。
+5. HTTP 2xx 只表示 Webhook 接受请求，实际投递需在 Teams 或 Workflows 运行记录确认。超时、网络失败可能出现结果未知，不自动重试；请先检查 Teams，避免重复发布。
+
+发送内容为当前报告快照：所选 Sprint / 状态、日周维度与日期范围、状态数量 / 合计 / 环比、净变化数量、新建数量、JQL 和 Jira 查询链接。不会发送逐条任务标题、负责人或完整变更历史。预览为完整文本内容，实际 Teams 使用 Adaptive Card 排版。
+
+- Webhook URL 仅使用 `GM_setValue` 保存在当前油猴脚本存储，不放入源码或 GitHub。配置中支持清除；预览只显示主机，不显示签名密钥。不要把自己的 Webhook 提交为 issue 或发到公开聊天。
+- 支持微软 `*.logic.azure.com`、`*.api.powerplatform.com`、`*.api.powerautomate.com` Workflows HTTPS 地址，不支持旧版 Office Connector URL、任意第三方代理或自定义中转域名。
+- 当前仅支持凭 Webhook URL 调用的触发器；**不支持要求 Microsoft OAuth/Bearer Token 的租户认证触发器**。若公司策略要求认证，需由管理员提供合规的认证接入方案，脚本不会复用 Jira Cookie 或绕过租户认证。
+- 单条报告超过 26 KiB 会阻止发送并提示减少所选 Sprint，不会静默删减内容。发送不带 Cookie，不跟随重定向，不做自动重试，确认按钮防重复点击。
+- 本地模拟验证了配置保存、预览/取消不发送、确认单次 POST、卡片格式和超时处理；**未使用真实 Webhook 投递测试**。
+
+参考：[Microsoft Teams Workflows 文档](https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook)、[Tampermonkey API](https://www.tampermonkey.net/documentation.php?locale=en)。
 
 ## Sprint 和状态选择
 
@@ -61,7 +79,7 @@
 
 ## 验证状态
 
-已通过 14 项本地自动化测试（DOM 模拟及模拟 REST，不代表真实 Jira 联调）：午夜边界、多次流转回溯、新建任务、现代/旧式 Sprint 格式、多 Sprint 关联、空 Sprint、零分母、CSV 转义、当前页面 JQL 优先级、搜索分页、重复分析刷新历史、updated 时间格式差异、历史截断分页和失败阻断、UI 明细文本安全、Sprint 勾选隔离与历史请求范围、状态过滤与跨状态流出合计、默认全部直接勾选状态、198 条四页数据组合筛选及实际 CSV 内容、旧面板替换、浏览器 module 全局兼容、固定状态范围、日/周切换及周一/周日与跨年边界。
+已通过 18 项本地自动化测试（DOM 模拟及模拟 REST，不代表真实 Jira 联调）：午夜边界、多次流转回溯、新建任务、现代/旧式 Sprint 格式、多 Sprint 关联、空 Sprint、零分母、CSV 转义、当前页面 JQL 优先级、搜索分页、重复分析刷新历史、updated 时间格式差异、历史截断分页和失败阻断、UI 明细文本安全、Sprint 勾选隔离与历史请求范围、状态过滤与跨状态流出合计、默认全部直接勾选状态、198 条四页数据组合筛选及实际 CSV 内容、旧面板替换、浏览器 module 全局兼容、固定状态范围、日/周切换及周一/周日与跨年边界、Teams URL 校验、菜单配置保存不发送、预览取消不发送、确认单次 POST 与超时不重试。
 
 **尚未在目标 Jira 的登录会话中联调**：开发环境访问目标页面时返回登录页。首次使用需验证该实例的 API 权限与 changelog 完整性；如果报错，请反馈面板提示及 HTTP 状态码，不必提供密码、Cookie 或 Token。
 

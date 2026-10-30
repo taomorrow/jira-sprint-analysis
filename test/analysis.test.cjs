@@ -24,10 +24,11 @@ test('aggregation preserves state totals, zero denominator and new issues',()=>{
  assert.equal(core.rate(0,2),'新增');assert.equal(core.rate(0,0),'—');assert.equal(core.rate(4,3),'-25.0%');
  assert.equal(core.csvCell('=1+1'),'"\'=1+1"');assert.equal(core.csvCell('a,"b"'),'"a,""b"""');
 });
-async function fixture({truncated=false,fail=false,mismatch=false,multi=false,beforeRun}={}) {
+async function fixture({truncated=false,fail=false,mismatch=false,multi=false,beforeRun,setupGM}={}) {
  const dom=new JSDOM('<body></body>',{url:'https://jira.xpaas.lenovo.com/issues/?filter=180929&jql=project%20%3D%20DEMO',runScripts:'outside-only'});
  const {window:w}=dom;const calls=[];let detailCalls=0;
- w.Date.now=()=>now;
+ w.Date.now=()=>now;w.TextEncoder=TextEncoder;
+ if(setupGM)setupGM(w);
  w.HTMLElement.prototype.scrollIntoView=function(){};
  w.addEventListener('error',e=>{throw e.error;});
  const i=issue();i.fields.created='2020-01-01T00:00:00+08:00';
@@ -106,7 +107,8 @@ test('clicking a named status from default All selects that status, not every ot
 });
 test('198-result paging, Sprint + two statuses and CSV use the same selected scope',async()=>{
  const dom=new JSDOM('<body></body>',{url:'https://jira.xpaas.lenovo.com/issues/?jql=project%3DDEMO',runScripts:'outside-only'}),w=dom.window;
- w.Date.now=()=>now;w.HTMLElement.prototype.scrollIntoView=function(){};
+ w.Date.now=()=>now;w.TextEncoder=TextEncoder;
+w.HTMLElement.prototype.scrollIntoView=function(){};
  // Jira pages may define a global module; that must not disable the userscript.
  w.module={exports:{}};
  const samples=Array.from({length:198},(_,n)=>{
@@ -126,7 +128,7 @@ test('198-result paging, Sprint + two statuses and CSV use the same selected sco
  // Reproduce an old panel winning the previous early-return check.
  const old=w.document.createElement('div');old.id='jsa-host';old.attachShadow({mode:'open'}).innerHTML='<h1><small>v0.1.1</small></h1>';w.document.body.append(old);
  w.eval(source);const root=w.document.getElementById('jsa-host').shadowRoot;
- assert.match(root.getElementById('launch').textContent,/0.1.4/);assert.equal(old.isConnected,false);
+ assert.match(root.getElementById('launch').textContent,/0.1.5/);assert.equal(old.isConnected,false);
  async function click(id){root.getElementById(id).click();for(let n=0;n<500&&root.getElementById('run').disabled;n++)await new Promise(r=>setTimeout(r,1));assert.equal(root.getElementById('run').disabled,false);}
  await click('load');
  root.querySelector('#statuses input[value="in progress"]').click();root.querySelector('#statuses input[value="sit"]').click();
@@ -167,4 +169,38 @@ test('fixed statuses exclude others, merge case variants and preserve zero selec
  const source=core.aggregate([a,b],'customfield_1',['7'],cutoff,now);
  const [all]=core.selectStatusGroups(source,null);assert.equal(all.issues.length,1);assert.equal(all.rows.size,1);
  const [filtered]=core.selectStatusGroups(source,['in progress','sit']);assert.equal(filtered.rows.get('sit').after.length,0);assert.equal(filtered.rows.get('in progress').after.length,1);
+});
+
+const teamsTestUrl='https://demo.logic.azure.com/workflows/example/triggers/manual/paths/invoke?sig=LOCAL_TEST_ONLY';
+test('Teams URL validation rejects non-Microsoft, HTTP, credentials and fragments',()=>{
+ assert.equal(core.validateTeamsUrl(teamsTestUrl),teamsTestUrl);
+ for(const u of ['http://demo.logic.azure.com/workflows/x','https://evil.test/workflows/x','https://demo.logic.azure.com.evil.test/workflows/x','https://user:pass@demo.logic.azure.com/workflows/x','https://demo.logic.azure.com/workflows/x#secret'])assert.throws(()=>core.validateTeamsUrl(u));
+});
+test('Teams menu configuration persists locally without making network requests',async()=>{
+ const stored={},commands=[],posts=[];
+ const f=await fixture({setupGM(w){w.GM_registerMenuCommand=(name,fn)=>commands.push({name,fn});w.GM_getValue=(k,d)=>stored[k]||d;w.GM_setValue=(k,v)=>stored[k]=v;w.GM_deleteValue=k=>delete stored[k];w.GM_xmlhttpRequest=x=>posts.push(x);}});
+ assert.equal(commands[0].name,'Teams 配置');commands[0].fn();
+ f.root.getElementById('teams-name').value='示例日报频道';f.root.getElementById('teams-url').value=teamsTestUrl;
+ await f.click('teams-save');assert.equal(stored['teams-config'].url,teamsTestUrl);assert.equal(posts.length,0);
+ await f.click('teams-clear');assert.equal(stored['teams-config'],undefined);assert.equal(posts.length,0);f.dom.window.close();
+});
+test('Teams preview/cancel never sends; explicit confirmation sends exact preview snapshot once',async()=>{
+ const posts=[];
+ const f=await fixture({setupGM(w){w.GM_getValue=()=>({name:'示例频道',url:teamsTestUrl});w.GM_xmlhttpRequest=x=>{posts.push(x);x.onload({status:202});};}});
+ assert.equal(f.root.getElementById('teams-preview').disabled,false);
+ await f.click('teams-preview');assert.equal(posts.length,0);
+ const preview=f.root.getElementById('teams-preview-content').textContent;
+ assert.match(preview,/Completed/);assert.ok(!preview.includes('onerror'));assert.ok(!f.root.getElementById('teams-dialog').textContent.includes('LOCAL_TEST_ONLY'));
+ await f.click('teams-preview-cancel');assert.equal(posts.length,0);
+ await f.click('teams-preview');await f.click('teams-send');await f.click('teams-send');
+ assert.equal(posts.length,1);assert.equal(posts[0].anonymous,true);assert.equal(posts[0].redirect,'error');assert.equal(posts[0].method,'POST');
+ const payload=JSON.parse(posts[0].data),card=payload.attachments[0].content;
+ assert.equal(payload.attachments[0].contentType,'application/vnd.microsoft.card.adaptive');
+ assert.ok(card.body.some(b=>b.text==='Completed｜0 → 2｜+2｜新增')||card.body.some(b=>b.text==='Completed｜2 → 2｜0｜0.0%'));
+ assert.match(f.root.getElementById('teams-send-status').textContent,/接受请求/);assert.ok(!posts[0].data.includes('LOCAL_TEST_ONLY'));assert.ok(!posts[0].data.includes('onerror'));
+ f.dom.window.close();
+});
+test('Teams timeouts are not automatically retried or reported as delivered',async()=>{
+ let count=0;const f=await fixture({setupGM(w){w.GM_getValue=()=>({name:'示例频道',url:teamsTestUrl});w.GM_xmlhttpRequest=x=>{count++;x.ontimeout();};}});
+ await f.click('teams-preview');await f.click('teams-send');assert.equal(count,1);assert.match(f.root.getElementById('teams-send-status').textContent,/投递结果未知/);assert.equal(f.root.getElementById('teams-send').disabled,true);f.dom.window.close();
 });
