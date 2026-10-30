@@ -128,7 +128,7 @@ w.HTMLElement.prototype.scrollIntoView=function(){};
  // Reproduce an old panel winning the previous early-return check.
  const old=w.document.createElement('div');old.id='jsa-host';old.attachShadow({mode:'open'}).innerHTML='<h1><small>v0.1.1</small></h1>';w.document.body.append(old);
  w.eval(source);const root=w.document.getElementById('jsa-host').shadowRoot;
- assert.match(root.getElementById('launch').textContent,/0.1.6/);assert.equal(old.isConnected,false);
+ assert.match(root.getElementById('launch').textContent,/0.1.7/);assert.equal(old.isConnected,false);
  async function click(id){root.getElementById(id).click();for(let n=0;n<500&&root.getElementById('run').disabled;n++)await new Promise(r=>setTimeout(r,1));assert.equal(root.getElementById('run').disabled,false);}
  await click('load');
  root.querySelector('#statuses input[value="in progress"]').click();root.querySelector('#statuses input[value="sit"]').click();
@@ -196,7 +196,8 @@ test('Teams preview/cancel never sends; explicit confirmation sends exact previe
  assert.equal(posts.length,1);assert.equal(posts[0].anonymous,true);assert.equal(posts[0].redirect,'error');assert.equal(posts[0].method,'POST');
  const payload=JSON.parse(posts[0].data),card=payload.attachments[0].content;
  assert.equal(payload.attachments[0].contentType,'application/vnd.microsoft.card.adaptive');
- assert.ok(card.body.some(b=>b.text==='Completed｜0 → 2｜+2｜新增')||card.body.some(b=>b.text==='Completed｜2 → 2｜0｜0.0%'));
+ const texts=[];function walk(x){if(Array.isArray(x))x.forEach(walk);else if(x&&typeof x==='object'){if(x.type==='TextBlock')texts.push(x.text);Object.values(x).forEach(walk);}}walk(card.body);assert.ok(texts.includes('Completed'));assert.ok(texts.includes('所选状态合计'));
+ assert.ok(f.root.querySelector('#teams-preview-content table'));assert.equal(f.root.querySelectorAll('#teams-preview-content table tr').length,4);
  assert.match(f.root.getElementById('teams-send-status').textContent,/接受请求/);assert.ok(!posts[0].data.includes('LOCAL_TEST_ONLY'));assert.ok(!posts[0].data.includes('onerror'));
  f.dom.window.close();
 });
@@ -221,4 +222,19 @@ test('network and HTTP diagnostics expose codes but redact webhook secrets and r
  const msg=core.teamsResponseInfo({status:0,readyState:4,error:'net::ERR_FAILED Refused to connect '+teamsTestUrl,responseText:'secret body LOCAL_TEST_ONLY'});
  assert.match(msg,/HTTP 0/);assert.match(msg,/ERR_FAILED/);assert.ok(!msg.includes('LOCAL_TEST_ONLY'));assert.ok(!msg.includes('https://'));
  assert.equal(core.teamsResponseInfo({status:401,responseText:JSON.stringify({error:{code:'AuthorizationFailed',message:teamsTestUrl}})}),'HTTP 401；AuthorizationFailed');
+});
+
+test('Teams structured card uses aligned columns, totals, collapsible metadata and compact two-Sprint payload',()=>{
+ const a=issue(),b=issue('DEMO-2');b.fields.customfield_1=[{id:8,name:'Second Sprint',state:'active'}];
+ const gs=core.aggregate([a,b],'customfield_1',['7','8'],cutoff,now);
+ // Largest regular report: all twelve status rows and a total, for two Sprints.
+ for(const g of gs){g.rows.clear();for(const [i,name] of core.STATUS_NAMES.entries())g.rows.set('fixed-'+i,{name,before:[a],after:[a,b]});}
+ const report=core.buildTeamsReport(gs,'查询开始 2026/10/30｜JQL：project = DEMO',core.comparisonPeriod(now,'week'),'https://jira.example.test/issues/?jql=project%3DDEMO');
+ const card=report.payload.attachments[0].content;
+ assert.equal(card.msteams.width,'Full');assert.ok(card.body.some(b=>b.id==='analysis-details'&&b.isVisible===false));
+ assert.ok(card.actions.some(a=>a.type==='Action.ToggleVisibility'));
+ const section=card.body.find(b=>b.type==='Container'&&b.items?.[0]?.text==='Demo Sprint');
+ const row=section.items.find(b=>b.type==='Container').items[0];assert.equal(row.columns.length,5);assert.equal(row.columns[1].items[0].horizontalAlignment,'Right');
+ const bytes=new TextEncoder().encode(JSON.stringify(report.payload)).length;assert.ok(bytes<26*1024,'payload bytes: '+bytes);
+ assert.equal(report.sections.length,2);
 });

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Jira Sprint Analysis
 // @namespace    https://github.com/taomorrow/jira-sprint-analysis
-// @version      0.1.6
+// @version      0.1.7
 // @description  按 Sprint 对比昨日与今日状态，查看变化明细并导出 CSV。
 // @author       taomorrow
 // @match        https://jira.xpaas.lenovo.com/*
@@ -156,27 +156,35 @@
     return parts.join('；')||'浏览器/扩展未提供 HTTP 响应';
   }
   function buildTeamsReport(groups,meta,period,jiraUrl){
-    const body=[{type:'TextBlock',text:'Jira Sprint Analysis',size:'Large',weight:'Bolder',wrap:true},
-      {type:'TextBlock',text:meta,wrap:true,size:'Small'},
-      {type:'TextBlock',text:'口径：当前成员回溯；仅包含所选状态。'+period.description,wrap:true,size:'Small'}];
-    const lines=['Jira Sprint Analysis',meta,'口径：当前成员回溯；仅包含所选状态。'+period.description];
+    const block=(value,extra={})=>({type:'TextBlock',text:String(value),wrap:true,...extra});
+    const columns=(values,header=false)=>({type:'ColumnSet',spacing:'Small',columns:values.map((value,i)=>({
+      type:'Column',width:[2.6,1,1,1,1.3][i],spacing:'Small',items:[block(value,{size:'Small',...(header?{weight:'Bolder'}:{}),...(i?{horizontalAlignment:'Right'}:{})})]
+    }))});
+    const heading=['状态',period.before==='上周日终'?'上周末':'昨日',period.after==='本周截至当前'?'本周':'今日','增减',period.rate];
+    const generated=meta.split('｜')[0].trim();
+    const body=[block('Sprint Analysis',{size:'Large',weight:'Bolder',color:'Accent'}),
+      block(period.description,{size:'Small'}),block(generated,{size:'Small',isSubtle:true,spacing:'Small'})];
+    const sections=[];
     for(const g of groups){
-      body.push({type:'TextBlock',text:g.name+' ['+g.id+']',weight:'Bolder',wrap:true,separator:true});
-      lines.push('',g.name+' ['+g.id+']');
-      const changes=g.issues.filter(x=>x.changed).length,created=g.issues.filter(x=>!x.before&&x.after).length;
-      const summary=`净状态变化 ${changes} 条；${period.created} ${created} 条`;
-      body.push({type:'TextBlock',text:summary,wrap:true});lines.push(summary);
-      const header=`状态｜${period.before} → ${period.after}｜增减｜${period.rate}`;
-      body.push({type:'TextBlock',text:header,weight:'Bolder',wrap:true});lines.push(header);
-      for(const r of rowsWithTotal(g)){
-        const a=r.before.length,b=r.after.length,d=b-a;
-        const row=`${r.name}｜${a} → ${b}｜${d>0?'+':''}${d}｜${rate(a,b)}`;
-        body.push({type:'TextBlock',text:row,wrap:true,spacing:'Small'});lines.push(row);
+      const rows=rowsWithTotal(g),total=rows.at(-1),changes=g.issues.filter(x=>x.changed).length,created=g.issues.filter(x=>!x.before&&x.after).length;
+      const model={name:g.name,id:g.id,changes,created,rows:rows.map(r=>{const a=r.before.length,b=r.after.length,d=b-a;return [r.name,String(a),String(b),(d>0?'+':'')+d,rate(a,b)];})};sections.push(model);
+      const metrics=[['当前数量',total.after.length],['净状态变化',changes],[period.created,created]];
+      const items=[block(g.name,{size:'Medium',weight:'Bolder'}),block('Sprint #'+g.id,{size:'Small',isSubtle:true,spacing:'None'}),
+        {type:'ColumnSet',columns:metrics.map(([label,value])=>({type:'Column',width:1,items:[block(value,{size:'Large',weight:'Bolder',color:'Accent'}),block(label,{size:'Small',isSubtle:true,spacing:'None'})]}))},
+        {type:'Container',style:'emphasis',spacing:'Medium',items:[columns(heading,true)]}];
+      for(let i=0;i<model.rows.length;i++){
+        const values=model.rows[i],isTotal=i===model.rows.length-1,row=columns(values,isTotal);
+        if(values[3]!=='0')row.columns[3].items[0].color='Accent';
+        items.push(isTotal?{type:'Container',style:'emphasis',separator:true,items:[row]}:row);
       }
+      body.push({type:'Container',separator:true,spacing:'Large',items});
     }
-    // No issue titles, assignees or changelogs are sent.
-    const payload={type:'message',attachments:[{contentType:'application/vnd.microsoft.card.adaptive',contentUrl:null,content:{$schema:'http://adaptivecards.io/schemas/adaptive-card.json',type:'AdaptiveCard',version:'1.2',body,actions:[{type:'Action.OpenUrl',title:'打开 Jira 查询',url:jiraUrl}]}}]};
-    return {payload,preview:lines.join('\n')+'\n\n打开 Jira 查询：'+jiraUrl};
+    body.push(block('当前成员回溯 · 仅统计所选状态 · 数量增减不代表好坏',{size:'Small',isSubtle:true,separator:true}),
+      {type:'Container',id:'analysis-details',isVisible:false,items:[block(meta,{size:'Small',isSubtle:true})]});
+    const payload={type:'message',attachments:[{contentType:'application/vnd.microsoft.card.adaptive',contentUrl:null,content:{$schema:'http://adaptivecards.io/schemas/adaptive-card.json',type:'AdaptiveCard',version:'1.2',msteams:{width:'Full'},body,actions:[
+      {type:'Action.OpenUrl',title:'打开 Jira 查询',url:jiraUrl},{type:'Action.ToggleVisibility',title:'统计口径与查询条件',targetElements:['analysis-details']}
+    ]}}]};
+    return {payload,sections,heading,generated,meta,description:period.description,jiraUrl,period};
   }
   const core = {sprints,statusAt,rate,aggregate,csvCell,pageQuery,matchesSprint,filterGroups,rowsWithTotal,STATUS_NAMES,normalized,comparisonPeriod,selectStatusGroups,validateTeamsUrl,buildTeamsReport,teamsResponseInfo};
   if (typeof window === 'undefined' && typeof module === 'object' && module.exports) { module.exports = core; return; }
@@ -184,16 +192,16 @@
   const existing=document.getElementById('jsa-host');
   if(existing){
     const previous=existing.dataset.jsaVersion||existing.shadowRoot?.querySelector('h1 small')?.textContent?.replace(/^v/,'')||'0.0.0';
-    const parts=v=>v.split('.').map(Number),a=parts(previous),b=parts('0.1.6');
+    const parts=v=>v.split('.').map(Number),a=parts(previous),b=parts('0.1.7');
     const comparison=a.reduce((r,n,i)=>r||n-(b[i]||0),0);
     if(comparison>=0)return;
     existing.remove();
   }
-  const host=document.createElement('div'); host.id='jsa-host';host.dataset.jsaVersion='0.1.6'; document.body.append(host);
+  const host=document.createElement('div'); host.id='jsa-host';host.dataset.jsaVersion='0.1.7'; document.body.append(host);
   const root=host.attachShadow({mode:'open'});
   root.innerHTML=`<style>
   :host{all:initial;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#172b4d}*{box-sizing:border-box}button,input,select{font:inherit}button{cursor:pointer;border:1px solid #c9d3e0;border-radius:6px;background:white;color:#172b4d;padding:7px 12px}button:hover{background:#edf3ff}.primary:hover,#launch:hover{background:#0747a6}#close{white-space:nowrap}button:disabled{opacity:.5;cursor:wait}.primary,#launch{background:#0052cc;color:white;border-color:#0052cc}#launch{position:fixed;right:24px;bottom:24px;z-index:2147483646;box-shadow:0 5px 20px #091e4240}#overlay{position:fixed;inset:0;background:#091e4260;z-index:2147483647;padding:3vh 3vw;display:none}#panel{background:#f7f9fc;border-radius:14px;max-width:1280px;margin:auto;height:94vh;overflow:auto;box-shadow:0 20px 80px #091e4255;padding:24px}header{display:flex;align-items:center;justify-content:space-between}h1{font-size:24px;margin:0}h2{font-size:17px;margin:0 0 12px}.muted{color:#5e6c84}p{margin:8px 0}.controls{display:flex;gap:16px;align-items:end;flex-wrap:wrap;margin:18px 0}label{display:flex;flex-direction:column;gap:5px}input,select{border:1px solid #b3bfd0;border-radius:5px;padding:7px;background:white;color:#172b4d}fieldset{margin:0;border:1px solid #b3bfd0;border-radius:6px;padding:8px;background:white;min-width:280px;max-width:100%}.choices{height:140px;overflow:auto;max-width:430px}.choices label{display:flex;flex-direction:row;align-items:center;gap:8px;padding:3px;cursor:pointer}.choices input{margin:0}.tools{display:flex;gap:8px;margin-bottom:5px}.tools button{padding:2px 8px}legend{padding:0 5px}.card{overflow-x:auto;background:white;border:1px solid #dfe5ed;border-radius:9px;margin:16px 0;padding:18px}.notice{padding:10px 14px;background:#eaf1ff;border-radius:6px}#message{white-space:pre-wrap}#message.error{background:#fff0ed;color:#ae2a19;padding:12px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{text-align:left;border-bottom:1px solid #e8ecf2;padding:9px 10px}th{background:#f4f6fa;color:#5e6c84}td button{border:0;padding:0;color:#0052cc;background:none;text-decoration:underline}.delta{font-variant-numeric:tabular-nums;font-weight:600}a{color:#0052cc}#detail{overflow:auto}small{font-size:12px}@media(max-width:650px){#panel{padding:14px}.controls{display:block}label{margin:10px 0}#sprints{min-width:0;width:100%}th,td{padding:6px}h1{font-size:20px}}
-  </style><button id="launch">◷ Sprint Analysis v0.1.6</button><div id="overlay"><section id="panel" role="dialog" aria-modal="true" aria-label="Sprint Analysis"><header><div><h1>Sprint Analysis <small class="muted">v0.1.6</small></h1><p class="muted"><span id="period-description"></span> · Asia/Shanghai（UTC+08:00）</p></div><button id="close" aria-label="关闭">关闭</button></header>
+  </style><button id="launch">◷ Sprint Analysis v0.1.7</button><div id="overlay"><section id="panel" role="dialog" aria-modal="true" aria-label="Sprint Analysis"><header><div><h1>Sprint Analysis <small class="muted">v0.1.7</small></h1><p class="muted"><span id="period-description"></span> · Asia/Shanghai（UTC+08:00）</p></div><button id="close" aria-label="关闭">关闭</button></header>
   <div class="notice">口径：以本次查询匹配的成员回溯对比时点的状态；不还原历史 Sprint 成员或历史筛选条件。已关闭 Sprint 也可能保留在任务 Sprint 字段中；同一任务可出现在多个 Sprint，各 Sprint 不可直接相加。</div>
   <div class="controls"><label>对比维度<select id="period"><option value="day">By day · 昨天 / 今天</option><option value="week">By week · 上周 / 本周（周一至周日）</option></select></label><button id="load">载入当前页面（全部分页）</button><fieldset id="sprint-box"><legend>Sprint（勾选，可多选）</legend><div class="tools"><button id="sprint-all" type="button">全选</button><button id="sprint-none" type="button">清空</button></div><div id="sprints" class="choices"></div></fieldset><fieldset id="status-box"><legend>状态（默认全部，可多选）</legend><label><input type="checkbox" id="status-all" checked>全部指定状态（以下 12 个）</label><p class="muted">直接勾选下面的状态即可切换为指定状态。</p><div id="statuses" class="choices"></div></fieldset><button id="run" class="primary">开始分析</button><button id="export" disabled>导出 CSV</button><button id="teams-config">Teams 配置</button><button id="teams-preview" disabled>预览并推送到 Teams</button></div>
   <p class="muted">统计当前页面查询的全部分页，不扩大到整个 Sprint。修改 Jira 搜索条件后请先点击 Search，再重新载入。若页面排除了已解决任务，完成数量也会受限。</p><p id="message" role="status">点击“载入当前页面”读取全部结果；本工具只读取 Jira，不修改任务。</p><div id="results"></div><div id="detail"></div></section></div>`;
@@ -376,8 +384,21 @@
       text('p','目标：'+config.name,teamsBox);
       // Keep the URL signature out of DOM preview and error messages.
       text('p','Webhook 主机：'+new URL(destination).hostname+'（密钥已隐藏；目标名称由本地配置提供）',teamsBox);
-      text('p',`将发送当前报告的统计摘要、JQL 和 Jira 查询链接，共 ${bytes} 字节。不包含逐条任务标题、负责人或完整历史。以下是全部消息内容；Teams 卡片排版可能不同。`,teamsBox);
-      const preview=text('pre',report.preview,teamsBox);preview.id='teams-preview-content';preview.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f6fa;padding:16px;max-height:48vh;overflow:auto';
+      text('p',`将发送当前报告的统计摘要、JQL 和 Jira 查询链接，共 ${bytes} 字节。不包含逐条任务标题、负责人或完整历史。以下为卡片内容预览（查询条件可展开查看）；实际排版随 Teams 客户端变化。`,teamsBox);
+      const preview=document.createElement('div');preview.id='teams-preview-content';preview.style.cssText='background:#f5f7fb;padding:16px;max-height:55vh;overflow:auto;border:1px solid #dfe5ed;border-radius:10px';teamsBox.append(preview);
+      text('h2','Sprint Analysis',preview).style.color='#0052cc';text('p',report.description,preview);text('p',report.generated,preview).className='muted';
+      for(const section of report.sections){
+        const card=document.createElement('section');card.className='card';preview.append(card);text('h2',section.name,card);text('small','Sprint #'+section.id,card).className='muted';
+        const summary=document.createElement('div');summary.style.cssText='display:flex;gap:24px;flex-wrap:wrap;margin:12px 0';card.append(summary);
+        for(const [label,value] of [['当前数量',section.rows.at(-1)[2]],['净状态变化',section.changes],[report.period.created,section.created]]){
+          const metric=document.createElement('div');summary.append(metric);text('strong',String(value),metric).style.cssText='display:block;font-size:24px;color:#0052cc';text('small',label,metric).className='muted';
+        }
+        const table=document.createElement('table');card.append(table);const head=document.createElement('tr');table.append(head);report.heading.forEach(h=>text('th',h,head));
+        for(let i=0;i<section.rows.length;i++){const tr=document.createElement('tr');table.append(tr);if(i===section.rows.length-1)tr.style.cssText='font-weight:700;background:#eaf1ff';section.rows[i].forEach((v,j)=>{const td=text('td',v,tr);if(j)td.style.textAlign='right';});}
+      }
+      text('p','当前成员回溯 · 仅统计所选状态 · 数量增减不代表好坏',preview).className='muted';
+      const details=document.createElement('details');preview.append(details);text('summary','统计口径与查询条件',details);text('p',report.meta,details).style.overflowWrap='anywhere';
+      const link=text('a','打开 Jira 查询',preview);link.href=report.jiraUrl;link.target='_blank';link.rel='noopener noreferrer';
       const status=text('p','尚未发送。确认预览后点击下方按钮。',teamsBox);status.id='teams-send-status';status.setAttribute('role','status');
       const cancel=teamsButton('teams-preview-cancel','取消',closeTeams);
       const send=teamsButton('teams-send','确认推送',()=>{
