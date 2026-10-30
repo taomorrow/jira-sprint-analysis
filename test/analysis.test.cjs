@@ -128,7 +128,7 @@ w.HTMLElement.prototype.scrollIntoView=function(){};
  // Reproduce an old panel winning the previous early-return check.
  const old=w.document.createElement('div');old.id='jsa-host';old.attachShadow({mode:'open'}).innerHTML='<h1><small>v0.1.1</small></h1>';w.document.body.append(old);
  w.eval(source);const root=w.document.getElementById('jsa-host').shadowRoot;
- assert.match(root.getElementById('launch').textContent,/0.1.7/);assert.equal(old.isConnected,false);
+ assert.match(root.getElementById('launch').textContent,/0.1.8/);assert.equal(old.isConnected,false);
  async function click(id){root.getElementById(id).click();for(let n=0;n<500&&root.getElementById('run').disabled;n++)await new Promise(r=>setTimeout(r,1));assert.equal(root.getElementById('run').disabled,false);}
  await click('load');
  root.querySelector('#statuses input[value="in progress"]').click();root.querySelector('#statuses input[value="sit"]').click();
@@ -234,7 +234,8 @@ test('Teams structured card uses aligned columns, totals, collapsible metadata a
  assert.equal(card.msteams.width,'Full');assert.ok(card.body.some(b=>b.id==='analysis-details'&&b.isVisible===false));
  assert.ok(card.actions.some(a=>a.type==='Action.ToggleVisibility'));
  const section=card.body.find(b=>b.type==='Container'&&b.items?.[0]?.text==='Demo Sprint');
- const row=section.items.find(b=>b.type==='Container').items[0];assert.equal(row.columns.length,5);assert.equal(row.columns[1].items[0].horizontalAlignment,'Right');
+ const row=section.items.find(b=>b.type==='ColumnSet'&&b.columns.length===5);assert.equal(row.columns.length,5);assert.equal(row.columns[0].width,'stretch');assert.equal(row.columns[0].items[0].horizontalAlignment,'Left');assert.equal(row.columns[1].items[0].horizontalAlignment,'Center');assert.ok(!row.columns[4].items[0].wrap);
+ const dataRows=section.items.filter(b=>b.type==='ColumnSet'&&b.columns.length===5).slice(1);assert.ok(dataRows.every(r=>r.separator===true));
  const bytes=new TextEncoder().encode(JSON.stringify(report.payload)).length;assert.ok(bytes<26*1024,'payload bytes: '+bytes);
  assert.equal(report.sections.length,2);
 });
